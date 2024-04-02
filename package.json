@@ -1,0 +1,45 @@
+{
+  "name": "@appthreat/caxa",
+  "version": "0.0.1",
+  "description": "Package Node.js applications into executable binaries",
+  "author": "Team AppThreat <cloud@appthreat.com>",
+  "homepage": "https://github.com/appthreat/caxa",
+  "bugs": "https://github.com/appthreat/caxa/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AppThreat/caxa.git"
+  },
+  "license": "MIT",
+  "keywords": [
+    "packing",
+    "deployment",
+    "binary"
+  ],
+  "exports": "./build/index.mjs",
+  "types": "./build/index.d.mts",
+  "bin": "./build/index.mjs",
+  "scripts": {
+    "prepare": "cd ./source/ && tsc",
+    "prepare:stubs": "shx rm -f stubs/stub--win32--x64 && cross-env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--win32--x64 stubs/stub.go && shx echo >> stubs/stub--win32--x64 && shx echo CAXACAXACAXA >> stubs/stub--win32--x64 && shx rm -f stubs/stub--darwin--x64 && cross-env CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--darwin--x64 stubs/stub.go && shx echo >> stubs/stub--darwin--x64 && shx echo CAXACAXACAXA >> stubs/stub--darwin--x64 && shx rm -f stubs/stub--darwin--arm64 && cross-env CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--darwin--arm64 stubs/stub.go && shx echo >> stubs/stub--darwin--arm64 && shx echo CAXACAXACAXA >> stubs/stub--darwin--arm64 && shx rm -f stubs/stub--linux--x64 && cross-env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--linux--x64 stubs/stub.go && shx echo >> stubs/stub--linux--x64 && shx echo CAXACAXACAXA >> stubs/stub--linux--x64 && shx rm -f stubs/stub--linux--arm64 && cross-env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--linux--arm64 stubs/stub.go && shx echo >> stubs/stub--linux--arm64 && shx echo CAXACAXACAXA >> stubs/stub--linux--arm64 && shx rm -f stubs/stub--linux--arm && cross-env CGO_ENABLED=0 GOOS=linux GOARCH=arm go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--linux--arm stubs/stub.go && shx echo >> stubs/stub--linux--arm && shx echo CAXACAXACAXA >> stubs/stub--linux--arm",
+    "test": "prettier --check \"source/**/*.mts\" --end-of-line auto"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "commander": "^12.0.0",
+    "crypto-random-string": "^5.0.0",
+    "dedent": "^1.5.1",
+    "execa": "^8.0.1",
+    "fs-extra": "^11.2.0",
+    "globby": "^14.0.1"
+  },
+  "devDependencies": {
+    "@types/archiver": "^6.0.2",
+    "@types/dedent": "^0.7.2",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^20.12.2",
+    "cross-env": "^7.0.3",
+    "prettier": "^3.2.5",
+    "shx": "^0.3.4",
+    "typescript": "^5.4.3"
+  }
+}
