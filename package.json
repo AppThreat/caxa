@@ -1,6 +1,6 @@
 {
   "name": "@appthreat/caxa",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Package Node.js applications into executable binaries",
   "author": "Team AppThreat <cloud@appthreat.com>",
   "homepage": "https://github.com/appthreat/caxa",
