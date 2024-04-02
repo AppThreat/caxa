@@ -24,7 +24,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-      - run: npm install-ci-test
+      - run: |
+          npm ci
+          npm test
+          npm run prepare
+          npm run prepare:stubs
 
   npm-publish:
     if: startsWith(github.ref, 'refs/tags/')
@@ -40,7 +44,11 @@ jobs:
         with:
           node-version: 21.x
           registry-url: https://registry.npmjs.org/
-      - run: npm ci && npm publish --access=public --@cyclonedx:registry='https://registry.npmjs.org'
+      - run: |
+          npm ci
+          npm run prepare
+          npm run prepare:stubs
+          npm publish --access=public --@cyclonedx:registry='https://registry.npmjs.org'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
