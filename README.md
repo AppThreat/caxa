@@ -1,7 +1,9 @@
 Forked from caxa [3.0.1](https://github.com/leafac/caxa/releases/tag/v3.0.1) with the following changes:
 
-- Updated packages
-- Added default excludes to ignore .git and some test directories
+- Updated packages.
+- Added default excludes to ignore .git and some test directories.
+- Removed broken unit tests from source/index.mts.
+- Excluded build and binary stubs using .gitignore. The published package would include binary stubs not present in this git repository.
 
 Original README below:
 
