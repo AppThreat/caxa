@@ -31,6 +31,9 @@ export default async function caxa({
   force = true,
   exclude = defaultExcludes,
   filter = (() => {
+    if (!exclude.length) {
+      exclude = defaultExcludes;
+    }
     const pathsToExclude = globbySync(exclude, {
       expandDirectories: false,
       onlyFiles: false,
@@ -38,7 +41,7 @@ export default async function caxa({
     return (pathToCopy: string) =>
       !pathsToExclude.includes(path.normalize(pathToCopy));
   })(),
-  dedupe = true,
+  dedupe = false,
   prepareCommand,
   prepare = async (buildDirectory: string) => {
     if (prepareCommand === undefined) return;
@@ -232,8 +235,8 @@ if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
       `[Advanced] Paths to exclude from the build. The paths are passed to https://github.com/sindresorhus/globby and paths that match will be excluded. [Super-Advanced, Please don’t use] If you wish to emulate ‘--include’, you may use ‘--exclude "*" ".*" "!path-to-include" ...’. The problem with ‘--include’ is that if you change your project structure but forget to change the caxa invocation, then things will subtly fail only in the packaged version.`,
     )
     .option(
-      "-D, --no-dedupe",
-      "[Advanced] Don’t run ‘npm dedupe --production’ on the build directory.",
+      "--dedupe",
+      "[Advanced] Run ‘npm dedupe --production’ on the build directory.",
     )
     .option(
       "-p, --prepare-command <command>",
@@ -290,7 +293,7 @@ if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
           input,
           output,
           force,
-          exclude = [],
+          exclude,
           dedupe,
           prepareCommand,
           includeNode,
