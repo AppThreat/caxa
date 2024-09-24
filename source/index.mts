@@ -17,11 +17,21 @@ import process from "node:process";
 // Some default excludes
 const defaultExcludes = [
   ".*",
+  "*.exe",
+  "*.exe.sha256",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "tsconfig.json",
+  "deno.json",
+  "jsr.json",
   ".git/**",
+  ".github/**",
   ".vscode/**",
   "**/*/*.env",
   "docs/**",
   "test/**",
+  "types/**",
+  "bom.json",
 ];
 
 export default async function caxa({
