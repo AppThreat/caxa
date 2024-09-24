@@ -18,7 +18,7 @@
   "exports": "./build/index.mjs",
   "types": "./build/index.d.mts",
   "bin": {
-    "caxa": "./build/index.mjs"
+    "caxa": "build/index.mjs"
   },
   "scripts": {
     "prepare": "cd ./source/ && tsc",
