@@ -21,6 +21,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '^1.23.1'
       - run: |
           npm ci
           npm test
@@ -41,6 +44,9 @@ jobs:
         with:
           node-version: '22.x'
           registry-url: https://registry.npmjs.org/
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '^1.23.1'
       - run: |
           npm ci
           npm run prepare
