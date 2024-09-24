@@ -69,8 +69,6 @@ Options:
   -o, --output <output>                  [Required] The path where the executable will be produced. On Windows, must end in ‘.exe’. In macOS and Linux, may have no extension to produce regular binary. In macOS and Linux, may end in ‘.sh’ to use the Shell Stub, which is a bit smaller, but depends on some tools being installed on the end-user machine, for example, ‘tar’, ‘tail’, and so forth. In macOS, may end in ‘.app’ to generate a macOS Application Bundle.
   -F, --no-force                         [Advanced] Don’t overwrite output if it exists.
   -e, --exclude <path...>                [Advanced] Paths to exclude from the build. The paths are passed to https://github.com/sindresorhus/globby and paths that match will be excluded. [Super-Advanced, Please don’t use] If you wish to emulate ‘--include’, you may use ‘--exclude "*" ".*" "!path-to-include" ...’. The problem with ‘--include’ is that if you change your project structure but forget to change the caxa invocation, then things will subtly fail only in the packaged version.
-  -D, --no-dedupe                        [Advanced] Don’t run ‘npm dedupe --production’ on the build directory.
-  -p, --prepare-command <command>        [Advanced] Command to run on the build directory after ‘npm dedupe --production’, before packaging.
   -N, --no-include-node                  [Advanced] Don’t copy the Node.js executable to ‘{{caxa}}/node_modules/.bin/node’.
   -s, --stub <path>                      [Advanced] Path to the stub.
   --identifier <identifier>              [Advanced] Build identifier, which is part of the path in which the application will be unpacked.

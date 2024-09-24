@@ -6,7 +6,6 @@ import os from "node:os";
 import stream from "node:stream/promises";
 import fs from "fs-extra";
 import { globbySync } from "globby";
-import { execa, execaCommand } from "execa";
 import cryptoRandomString from "crypto-random-string";
 import bash from "dedent";
 import archiver from "archiver";
@@ -19,6 +18,8 @@ const defaultExcludes = [
   ".*",
   "*.exe",
   "*.exe.sha256",
+  "*.yml",
+  "*.sh",
   "package-lock.json",
   "pnpm-lock.yaml",
   "tsconfig.json",
@@ -32,6 +33,8 @@ const defaultExcludes = [
   "test/**",
   "types/**",
   "bom.json",
+  "biome.json",
+  "jest.config.js",
 ];
 
 export default async function caxa({
@@ -51,12 +54,6 @@ export default async function caxa({
     return (pathToCopy: string) =>
       !pathsToExclude.includes(path.normalize(pathToCopy));
   })(),
-  dedupe = false,
-  prepareCommand,
-  prepare = async (buildDirectory: string) => {
-    if (prepareCommand === undefined) return;
-    await execaCommand(prepareCommand, { cwd: buildDirectory, shell: true });
-  },
   includeNode = true,
   stub = url.fileURLToPath(
     new URL(
@@ -77,9 +74,6 @@ export default async function caxa({
   force?: boolean;
   exclude?: string[];
   filter?: fs.CopyFilterSync | fs.CopyFilterAsync;
-  dedupe?: boolean;
-  prepareCommand?: string;
-  prepare?: (buildDirectory: string) => Promise<void>;
   includeNode?: boolean;
   stub?: string;
   identifier?: string;
@@ -99,9 +93,6 @@ export default async function caxa({
     cryptoRandomString({ length: 10, type: "alphanumeric" }).toLowerCase(),
   );
   await fs.copy(input, buildDirectory, { filter });
-  if (dedupe)
-    await execa("npm", ["dedupe", "--production"], { cwd: buildDirectory });
-  await prepare(buildDirectory);
   if (includeNode) {
     const node = path.join(
       buildDirectory,
@@ -245,14 +236,6 @@ if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
       `[Advanced] Paths to exclude from the build. The paths are passed to https://github.com/sindresorhus/globby and paths that match will be excluded. [Super-Advanced, Please don’t use] If you wish to emulate ‘--include’, you may use ‘--exclude "*" ".*" "!path-to-include" ...’. The problem with ‘--include’ is that if you change your project structure but forget to change the caxa invocation, then things will subtly fail only in the packaged version.`,
     )
     .option(
-      "--dedupe",
-      "[Advanced] Run ‘npm dedupe --production’ on the build directory.",
-    )
-    .option(
-      "-p, --prepare-command <command>",
-      "[Advanced] Command to run on the build directory after ‘npm dedupe --production’, before packaging.",
-    )
-    .option(
       "-N, --no-include-node",
       "[Advanced] Don’t copy the Node.js executable to ‘{{caxa}}/node_modules/.bin/node’.",
     )
@@ -304,8 +287,6 @@ if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
           output,
           force,
           exclude,
-          dedupe,
-          prepareCommand,
           includeNode,
           stub,
           identifier,
@@ -316,8 +297,6 @@ if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
           output: string;
           force?: boolean;
           exclude?: string[];
-          dedupe?: boolean;
-          prepareCommand?: string;
           includeNode?: boolean;
           stub?: string;
           identifier?: string;
@@ -332,8 +311,6 @@ if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
             command,
             force,
             exclude,
-            dedupe,
-            prepareCommand,
             includeNode,
             stub,
             identifier,
