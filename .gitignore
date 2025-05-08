@@ -129,3 +129,4 @@ stubs/stub--linux--arm
 stubs/stub--linux--arm64
 stubs/stub--linux--x64
 stubs/stub--win32--x64
+stubs/stub--win32--arm64

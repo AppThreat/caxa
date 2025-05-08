@@ -8,9 +8,9 @@ import fs from "fs-extra";
 import { globbySync } from "globby";
 import cryptoRandomString from "crypto-random-string";
 import bash from "dedent";
+import dedent from "dedent";
 import archiver from "archiver";
 import * as commander from "commander";
-import dedent from "dedent";
 import process from "node:process";
 
 // Some default excludes
