@@ -96,14 +96,16 @@ export default async function caxa({
 
   const buildDirectory = path.join(
     os.tmpdir(),
-    "caxa/builds",
+    "caxa",
+    "builds",
     cryptoRandomString({ length: 10, type: "alphanumeric" }).toLowerCase(),
   );
   await fs.copy(input, buildDirectory, { filter });
   if (includeNode) {
     const node = path.join(
       buildDirectory,
-      "node_modules/.bin",
+      "node_modules",
+      ".bin",
       path.basename(process.execPath),
     );
     await fs.ensureDir(path.dirname(node));
@@ -118,15 +120,15 @@ export default async function caxa({
       throw new Error(
         "macOS Application Bundles (.app) are supported in macOS only.",
       );
-    await fs.ensureDir(path.join(output, "Contents/Resources"));
+    await fs.ensureDir(path.join(output, "Contents", "Resources"));
     await fs.move(
       buildDirectory,
-      path.join(output, "Contents/Resources/application"),
+      path.join(output, "Contents", "Resources", "application"),
     );
-    await fs.ensureDir(path.join(output, "Contents/MacOS"));
+    await fs.ensureDir(path.join(output, "Contents", "MacOS"));
     const name = path.basename(output, ".app");
     await fs.writeFile(
-      path.join(output, "Contents/MacOS", name),
+      path.join(output, "Contents", "MacOS", name),
       bash`
         #!/usr/bin/env sh
         open "$(dirname "$0")/../Resources/${name}"
@@ -134,7 +136,7 @@ export default async function caxa({
       { mode: 0o755 },
     );
     await fs.writeFile(
-      path.join(output, "Contents/Resources", name),
+      path.join(output, "Contents", "Resources", name),
       bash`
         #!/usr/bin/env sh
         ${command
