@@ -13,8 +13,8 @@ jobs:
   test:
     strategy:
       matrix:
-        os: [windows-latest, windows-11-arm, macos-latest, macos-13, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
-        node-version: ['20.x', '21.x', '22.x', '23.x', '24.x']
+        os: [windows-latest, windows-11-arm, macos-latest, macos-15-intel, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
+        node-version: ['20.x', '24.x', '25.x']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +23,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - uses: actions/setup-go@v5
         with:
-          go-version: '^1.24.4'
+          go-version: '^1.25.6'
       - run: |
           npm ci
           npm test
@@ -42,16 +42,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24.x'
+          node-version: '25.x'
           registry-url: https://registry.npmjs.org/
+          scope: '@appthreat'
       - uses: actions/setup-go@v5
         with:
-          go-version: '^1.24.4'
+          go-version: '^1.25.6'
       - run: |
           npm ci
+          npm test
           npm run prepare
           npm run prepare:stubs
-          npm publish --access=public --@cyclonedx:registry='https://registry.npmjs.org'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm publish --access=public

@@ -1,6 +1,6 @@
 {
   "name": "@appthreat/caxa",
-  "version": "1.0.13",
+  "version": "2.0.0",
   "description": "Package Node.js applications into executable binaries",
   "author": "Team AppThreat <cloud@appthreat.com>",
   "homepage": "https://github.com/appthreat/caxa",
@@ -21,9 +21,16 @@
     "caxa": "build/index.mjs"
   },
   "scripts": {
-    "prepare": "cd ./source/ && tsc",
-    "prepare:stubs": "shx rm -f stubs/stub--win32--x64 && cross-env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--win32--x64 stubs/stub.go && shx echo >> stubs/stub--win32--x64 && shx echo CAXACAXACAXA >> stubs/stub--win32--x64 && shx rm -f stubs/stub--win32--arm64 && cross-env CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--win32--arm64 stubs/stub.go && shx echo >> stubs/stub--win32--arm64 && shx echo CAXACAXACAXA >> stubs/stub--win32--arm64 && shx rm -f stubs/stub--darwin--x64 && cross-env CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--darwin--x64 stubs/stub.go && shx echo >> stubs/stub--darwin--x64 && shx echo CAXACAXACAXA >> stubs/stub--darwin--x64 && shx rm -f stubs/stub--darwin--arm64 && cross-env CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--darwin--arm64 stubs/stub.go && shx echo >> stubs/stub--darwin--arm64 && shx echo CAXACAXACAXA >> stubs/stub--darwin--arm64 && shx rm -f stubs/stub--linux--x64 && cross-env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--linux--x64 stubs/stub.go && shx echo >> stubs/stub--linux--x64 && shx echo CAXACAXACAXA >> stubs/stub--linux--x64 && shx rm -f stubs/stub--linux--arm64 && cross-env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--linux--arm64 stubs/stub.go && shx echo >> stubs/stub--linux--arm64 && shx echo CAXACAXACAXA >> stubs/stub--linux--arm64 && shx rm -f stubs/stub--linux--riscv64 && cross-env CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--linux--riscv64 stubs/stub.go && shx echo >> stubs/stub--linux--riscv64 && shx echo CAXACAXACAXA >> stubs/stub--linux--riscv64 && shx rm -f stubs/stub--linux--arm && cross-env CGO_ENABLED=0 GOOS=linux GOARCH=arm go build -ldflags \"-s -w -extldflags=-Wl,-z,now,-z,relro\" -o stubs/stub--linux--arm stubs/stub.go && shx echo >> stubs/stub--linux--arm && shx echo CAXACAXACAXA >> stubs/stub--linux--arm",
-    "test": "prettier --check \"source/**/*.mts\" --end-of-line auto"
+    "prepare": "tsc",
+    "prepare:stubs": "shx rm -f stubs/stub--* && npm run build:stub:win && npm run build:stub:mac && npm run build:stub:linux",
+    "build:stub:win": "cross-env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -C stubs -ldflags \"-s -w\" -o stub--win32--x64 stub.go && npm run append:sig -- stubs/stub--win32--x64 && cross-env CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -C stubs -ldflags \"-s -w\" -o stub--win32--arm64 stub.go && npm run append:sig -- stubs/stub--win32--arm64",
+    "build:stub:mac": "cross-env CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -C stubs -ldflags \"-s -w\" -o stub--darwin--x64 stub.go && npm run append:sig -- stubs/stub--darwin--x64 && cross-env CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -C stubs -ldflags \"-s -w\" -o stub--darwin--arm64 stub.go && npm run append:sig -- stubs/stub--darwin--arm64",
+    "build:stub:linux": "cross-env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C stubs -ldflags \"-s -w\" -o stub--linux--x64 stub.go && npm run append:sig -- stubs/stub--linux--x64 && cross-env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -C stubs -ldflags \"-s -w\" -o stub--linux--arm64 stub.go && npm run append:sig -- stubs/stub--linux--arm64 && cross-env CGO_ENABLED=0 GOOS=linux GOARCH=arm go build -C stubs -ldflags \"-s -w\" -o stub--linux--arm stub.go && npm run append:sig -- stubs/stub--linux--arm",
+    "append:sig": "node -e \"const fs=require('fs'); fs.appendFileSync(process.argv[1], '\\nCAXACAXACAXA\\n')\"",
+    "test": "npm run test:lint && npm run test:go && npm run test:e2e",
+    "test:lint": "prettier --check \"source/**/*.mts\" --end-of-line auto",
+    "test:go": "cd stubs && go test -v",
+    "test:e2e": "node test/e2e.test.mjs"
   },
   "dependencies": {
     "archiver": "^7.0.1",

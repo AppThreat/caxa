@@ -3,7 +3,6 @@ package main
 import (
 	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,284 +14,271 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/klauspost/compress/gzip"
 )
 
+type Config struct {
+	Identifier           string   `json:"identifier"`
+	Command              []string `json:"command"`
+	UncompressionMessage string   `json:"uncompressionMessage"`
+}
+
+type fileJob struct {
+	dest string
+	data []byte
+	mode int64
+}
+
+const maxBufferSize = 1 * 1024 * 1024
+
 func main() {
-	executableFile, err := os.Executable()
+	exePath, err := os.Executable()
 	if err != nil {
-		log.Fatalf("caxa stub: Failed to find executable: %v", err)
+		log.Fatalf("caxa: failed to find executable: %v", err)
 	}
 
-	executable, err := os.ReadFile(executableFile)
+	data, err := os.ReadFile(exePath)
 	if err != nil {
-		log.Fatalf("caxa stub: Failed to read executable: %v", err)
+		log.Fatalf("caxa: failed to read executable: %v", err)
 	}
 
-	footerSeparator := []byte("\n")
-	footerIndex := bytes.LastIndex(executable, footerSeparator)
-	if footerIndex == -1 {
-		log.Fatalf("caxa stub: Failed to find footer (did you append an archive and a footer to the stub?): %v", err)
-	}
-	footerString := executable[footerIndex+len(footerSeparator):]
-	var footer struct {
-		Identifier           string   `json:"identifier"`
-		Command              []string `json:"command"`
-		UncompressionMessage string   `json:"uncompressionMessage"`
-	}
-	if err := json.Unmarshal(footerString, &footer); err != nil {
-		log.Fatalf("caxa stub: Failed to parse JSON in footer: %v", err)
+	config, payload, err := parseBinary(data)
+	if err != nil {
+		log.Fatalf("caxa: binary corrupted: %v", err)
 	}
 
-	var applicationDirectory string
-	for extractionAttempt := 0; true; extractionAttempt++ {
-		lock := path.Join(os.TempDir(), "caxa", "locks", footer.Identifier, strconv.Itoa(extractionAttempt))
-		applicationDirectory = path.Join(os.TempDir(), "caxa", "applications", footer.Identifier, strconv.Itoa(extractionAttempt))
-		applicationDirectoryFileInfo, err := os.Stat(applicationDirectory)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			log.Fatalf("caxa stub: Failed to find information about the application directory: %v", err)
+	appDir, err := prepareApplication(config, payload)
+	if err != nil {
+		log.Fatalf("caxa: failed to prepare application: %v", err)
+	}
+
+	if err := run(config, appDir); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.ExitCode())
 		}
-		if err == nil && !applicationDirectoryFileInfo.IsDir() {
-			log.Fatalf("caxa stub: Path to application directory already exists and isn’t a directory: %v", err)
+		log.Fatalf("caxa: execution failed: %v", err)
+	}
+}
+
+func parseBinary(data []byte) (*Config, []byte, error) {
+	footerSep := []byte("\n")
+	footerIdx := bytes.LastIndex(data, footerSep)
+	if footerIdx == -1 {
+		return nil, nil, errors.New("footer not found")
+	}
+
+	var config Config
+	if err := json.Unmarshal(data[footerIdx+1:], &config); err != nil {
+		return nil, nil, fmt.Errorf("invalid footer json: %w", err)
+	}
+
+	archiveSep := []byte("\nCAXACAXACAXA\n")
+	archiveIdx := bytes.Index(data, archiveSep)
+	if archiveIdx == -1 {
+		return nil, nil, errors.New("archive separator not found")
+	}
+
+	payload := data[archiveIdx+len(archiveSep) : footerIdx]
+	return &config, payload, nil
+}
+
+func prepareApplication(config *Config, payload []byte) (string, error) {
+	tempDir := os.Getenv("CAXA_TEMP_DIR")
+	if tempDir == "" {
+		tempDir = path.Join(os.TempDir(), "caxa")
+	}
+
+	for attempt := 0; ; attempt++ {
+		id := config.Identifier
+		sAttempt := strconv.Itoa(attempt)
+
+		appDir := path.Join(tempDir, "apps", id, sAttempt)
+		lockDir := path.Join(tempDir, "locks", id, sAttempt)
+
+		if info, err := os.Stat(appDir); err == nil && info.IsDir() {
+			if _, err := os.Stat(lockDir); os.IsNotExist(err) {
+				return appDir, nil
+			}
+			continue
 		}
-		if err == nil && applicationDirectoryFileInfo.IsDir() {
-			lockFileInfo, err := os.Stat(lock)
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				log.Fatalf("caxa stub: Failed to find information about the lock: %v", err)
-			}
-			if err == nil && !lockFileInfo.IsDir() {
-				log.Fatalf("caxa stub: Path to lock already exists and isn’t a directory: %v", err)
-			}
-			if err == nil && lockFileInfo.IsDir() {
-				// Application directory exists and lock exists as well, so a previous extraction wasn’t successful or an extraction is happening right now and hasn’t finished yet, in either case, start over with a fresh name.
-				continue
-			}
-			if err != nil && errors.Is(err, os.ErrNotExist) {
-				// Application directory exists and lock doesn’t exist, so a previous extraction was successful. Use the cached version of the application directory and don’t extract again.
-				break
-			}
+
+		if err := os.MkdirAll(lockDir, 0755); err != nil {
+			return "", fmt.Errorf("failed to create lock: %w", err)
 		}
-		if err != nil && errors.Is(err, os.ErrNotExist) {
-			ctx, cancelCtx := context.WithCancel(context.Background())
-			if footer.UncompressionMessage != "" {
-				fmt.Fprint(os.Stderr, footer.UncompressionMessage)
-				go func() {
-					ticker := time.NewTicker(time.Second * 5)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-ticker.C:
-							fmt.Fprint(os.Stderr, ".")
-						case <-ctx.Done():
-							fmt.Fprintln(os.Stderr, "")
-							return
-						}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		if config.UncompressionMessage != "" {
+			fmt.Fprint(os.Stderr, config.UncompressionMessage)
+			go func() {
+				t := time.NewTicker(2 * time.Second)
+				defer t.Stop()
+				for {
+					select {
+					case <-t.C:
+						fmt.Fprint(os.Stderr, ".")
+					case <-ctx.Done():
+						fmt.Fprintln(os.Stderr, "")
+						return
 					}
-				}()
-			}
-
-			if err := os.MkdirAll(lock, 0755); err != nil {
-				log.Fatalf("caxa stub: Failed to create the lock directory: %v", err)
-			}
-
-			// The use of ‘Repeat’ below is to make it even more improbable that the separator will appear literally in the compiled stub.
-			archiveSeparator := []byte("\n" + strings.Repeat("CAXA", 3) + "\n")
-			archiveIndex := bytes.Index(executable, archiveSeparator)
-			if archiveIndex == -1 {
-				log.Fatalf("caxa stub: Failed to find archive (did you append the separator when building the stub?): %v", err)
-			}
-			archive := executable[archiveIndex+len(archiveSeparator) : footerIndex]
-
-			if err := Untar(bytes.NewReader(archive), applicationDirectory); err != nil {
-				log.Fatalf("caxa stub: Failed to uncompress archive: %v", err)
-			}
-
-			os.Remove(lock)
-
-			cancelCtx()
-			break
+				}
+			}()
 		}
-	}
 
-	expandedCommand := make([]string, len(footer.Command))
-	applicationDirectoryPlaceholderRegexp := regexp.MustCompile(`\{\{\s*caxa\s*\}\}`)
-	for key, commandPart := range footer.Command {
-		expandedCommand[key] = applicationDirectoryPlaceholderRegexp.ReplaceAllLiteralString(commandPart, applicationDirectory)
-	}
+		if err := extract(payload, appDir); err != nil {
+			cancel()
+			os.RemoveAll(appDir)
+			os.RemoveAll(lockDir)
+			return "", err
+		}
 
-	command := exec.Command(expandedCommand[0], append(expandedCommand[1:], os.Args[1:]...)...)
-	command.Stdin = os.Stdin
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	err = command.Run()
-	var exitError *exec.ExitError
-	if errors.As(err, &exitError) {
-		os.Exit(exitError.ExitCode())
-	} else if err != nil {
-		log.Fatalf("caxa stub: Failed to run command: %v", err)
+		os.RemoveAll(lockDir)
+		cancel()
+		return appDir, nil
 	}
 }
 
-// Adapted from https://github.com/golang/build/blob/db2c93053bcd6b944723c262828c90af91b0477a/internal/untar/untar.go and https://github.com/mholt/archiver/tree/v3.5.0
-
-// Copyright 2017 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
-// Package untar untars a tarball to disk.
-// package untar
-
-// import (
-// 	"archive/tar"
-// 	"compress/gzip"
-// 	"fmt"
-// 	"io"
-// 	"log"
-// 	"os"
-// 	"path"
-// 	"path/filepath"
-// 	"strings"
-// 	"time"
-// )
-
-// TODO(bradfitz): this was copied from x/build/cmd/buildlet/buildlet.go
-// but there were some buildlet-specific bits in there, so the code is
-// forked for now.  Unfork and add some opts arguments here, so the
-// buildlet can use this code somehow.
-
-// Untar reads the gzip-compressed tar file from r and writes it into dir.
-func Untar(r io.Reader, dir string) error {
-	return untar(r, dir)
-}
-
-func untar(r io.Reader, dir string) (err error) {
-	t0 := time.Now()
-	nFiles := 0
-	madeDir := map[string]bool{}
-	// defer func() {
-	// 	td := time.Since(t0)
-	// 	if err == nil {
-	// 		log.Printf("extracted tarball into %s: %d files, %d dirs (%v)", dir, nFiles, len(madeDir), td)
-	// 	} else {
-	// 		log.Printf("error extracting tarball into %s after %d files, %d dirs, %v: %v", dir, nFiles, len(madeDir), td, err)
-	// 	}
-	// }()
-	zr, err := gzip.NewReader(r)
+func extract(payload []byte, dest string) error {
+	gr, err := gzip.NewReader(bytes.NewReader(payload))
 	if err != nil {
-		return fmt.Errorf("requires gzip-compressed body: %v", err)
+		return err
 	}
-	tr := tar.NewReader(zr)
-	loggedChtimesError := false
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+
+	numWorkers := runtime.NumCPU()
+	jobs := make(chan fileJob, numWorkers*2)
+	errChan := make(chan error, numWorkers)
+	var wg sync.WaitGroup
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				if err := os.MkdirAll(filepath.Dir(job.dest), 0755); err != nil {
+					select {
+					case errChan <- err:
+					default:
+					}
+					return
+				}
+				if err := os.WriteFile(job.dest, job.data, os.FileMode(job.mode)); err != nil {
+					select {
+					case errChan <- err:
+					default:
+					}
+					return
+				}
+			}
+		}()
+	}
+
 	for {
-		f, err := tr.Next()
+		select {
+		case err := <-errChan:
+			close(jobs)
+			return err
+		default:
+		}
+
+		header, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			// log.Printf("tar reading error: %v", err)
-			return fmt.Errorf("tar error: %v", err)
+			close(jobs)
+			return err
 		}
-		if !validRelPath(f.Name) {
-			return fmt.Errorf("tar contained invalid name error %q", f.Name)
-		}
-		rel := filepath.FromSlash(f.Name)
-		abs := filepath.Join(dir, rel)
 
-		fi := f.FileInfo()
-		mode := fi.Mode()
-		switch {
-		case mode.IsRegular():
-			// Make the directory. This is redundant because it should
-			// already be made by a directory entry in the tar
-			// beforehand. Thus, don't check for errors; the next
-			// write will fail with the same error.
-			dir := filepath.Dir(abs)
-			if !madeDir[dir] {
-				if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
+		target := filepath.Join(dest, filepath.FromSlash(header.Name))
+
+		if !strings.HasPrefix(target, filepath.Clean(dest)+string(os.PathSeparator)) {
+			close(jobs)
+			return fmt.Errorf("illegal file path: %s", header.Name)
+		}
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0755); err != nil {
+				close(jobs)
+				return err
+			}
+		case tar.TypeReg:
+			if header.Size < maxBufferSize {
+				buf := make([]byte, header.Size)
+				if _, err := io.ReadFull(tr, buf); err != nil {
+					close(jobs)
 					return err
 				}
-				madeDir[dir] = true
-			}
-			wf, err := os.OpenFile(abs, os.O_RDWR|os.O_CREATE|os.O_TRUNC, mode.Perm())
-			if err != nil {
-				return err
-			}
-			n, err := io.Copy(wf, tr)
-			if closeErr := wf.Close(); closeErr != nil && err == nil {
-				err = closeErr
-			}
-			if err != nil {
-				return fmt.Errorf("error writing to %s: %v", abs, err)
-			}
-			if n != f.Size {
-				return fmt.Errorf("only wrote %d bytes to %s; expected %d", n, abs, f.Size)
-			}
-			modTime := f.ModTime
-			if modTime.After(t0) {
-				// Clamp modtimes at system time. See
-				// golang.org/issue/19062 when clock on
-				// buildlet was behind the gitmirror server
-				// doing the git-archive.
-				modTime = t0
-			}
-			if !modTime.IsZero() {
-				if err := os.Chtimes(abs, modTime, modTime); err != nil && !loggedChtimesError {
-					// benign error. Gerrit doesn't even set the
-					// modtime in these, and we don't end up relying
-					// on it anywhere (the gomote push command relies
-					// on digests only), so this is a little pointless
-					// for now.
-					// log.Printf("error changing modtime: %v (further Chtimes errors suppressed)", err)
-					loggedChtimesError = true // once is enough
+				jobs <- fileJob{dest: target, data: buf, mode: header.Mode}
+			} else {
+				if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+					close(jobs)
+					return err
 				}
-			}
-			nFiles++
-		case mode.IsDir():
-			if err := os.MkdirAll(abs, 0755); err != nil {
-				return err
-			}
-			madeDir[abs] = true
-		case f.Typeflag == tar.TypeSymlink:
-			// leafac: Added by me to support symbolic links. Adapted from https://github.com/mholt/archiver/blob/v3.5.0/tar.go#L254-L276 and https://github.com/mholt/archiver/blob/v3.5.0/archiver.go#L313-L332
-			err := os.MkdirAll(filepath.Dir(abs), 0755)
-			if err != nil {
-				return fmt.Errorf("%s: making directory for file: %v", abs, err)
-			}
-			_, err = os.Lstat(abs)
-			if err == nil {
-				err = os.Remove(abs)
+				f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
 				if err != nil {
-					return fmt.Errorf("%s: failed to unlink: %+v", abs, err)
+					close(jobs)
+					return err
 				}
+				if _, err := io.Copy(f, tr); err != nil {
+					f.Close()
+					close(jobs)
+					return err
+				}
+				f.Close()
 			}
-
-			err = os.Symlink(f.Linkname, abs)
-			if err != nil {
-				return fmt.Errorf("%s: making symbolic link for: %v", abs, err)
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				close(jobs)
+				return err
 			}
-		default:
-			return fmt.Errorf("tar file entry %s contained unsupported file type %v", f.Name, mode)
+			_ = os.Remove(target)
+			if err := os.Symlink(header.Linkname, target); err != nil {
+				close(jobs)
+				return err
+			}
 		}
 	}
-	return nil
+
+	close(jobs)
+	wg.Wait()
+
+	select {
+	case err := <-errChan:
+		return err
+	default:
+		return nil
+	}
 }
 
-func validRelativeDir(dir string) bool {
-	if strings.Contains(dir, `\`) || path.IsAbs(dir) {
-		return false
-	}
-	dir = path.Clean(dir)
-	if strings.HasPrefix(dir, "../") || strings.HasSuffix(dir, "/..") || dir == ".." {
-		return false
-	}
-	return true
-}
+func run(config *Config, appDir string) error {
+	args := make([]string, len(config.Command))
+	rx := regexp.MustCompile(`\{\{\s*caxa\s*\}\}`)
 
-func validRelPath(p string) bool {
-	if p == "" || strings.Contains(p, `\`) || strings.HasPrefix(p, "/") || strings.Contains(p, "../") {
-		return false
+	for i, part := range config.Command {
+		args[i] = rx.ReplaceAllLiteralString(part, appDir)
 	}
-	return true
+
+	if len(os.Args) > 1 {
+		args = append(args, os.Args[1:]...)
+	}
+
+	if len(args) == 0 {
+		return errors.New("no command defined")
+	}
+
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
