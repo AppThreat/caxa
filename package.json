@@ -27,6 +27,7 @@
     "build:stub:mac": "cross-env CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -C stubs -ldflags \"-s -w\" -o stub--darwin--x64 stub.go && npm run append:sig -- stubs/stub--darwin--x64 && cross-env CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -C stubs -ldflags \"-s -w\" -o stub--darwin--arm64 stub.go && npm run append:sig -- stubs/stub--darwin--arm64",
     "build:stub:linux": "cross-env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C stubs -ldflags \"-s -w\" -o stub--linux--x64 stub.go && npm run append:sig -- stubs/stub--linux--x64 && cross-env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -C stubs -ldflags \"-s -w\" -o stub--linux--arm64 stub.go && npm run append:sig -- stubs/stub--linux--arm64 && cross-env CGO_ENABLED=0 GOOS=linux GOARCH=arm go build -C stubs -ldflags \"-s -w\" -o stub--linux--arm stub.go && npm run append:sig -- stubs/stub--linux--arm",
     "append:sig": "node -e \"const fs=require('fs'); fs.appendFileSync(process.argv[1], '\\nCAXACAXACAXA\\n')\"",
+    "pretest": "npm run prepare:stubs",
     "test": "npm run test:lint && npm run test:go && npm run test:e2e",
     "test:lint": "prettier --check \"source/**/*.mts\" --end-of-line auto",
     "test:go": "cd stubs && go test -v",
