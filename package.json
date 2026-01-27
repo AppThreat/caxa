@@ -21,7 +21,7 @@
     "caxa": "build/index.mjs"
   },
   "scripts": {
-    "prepare": "tsc",
+    "prepare": "npm run prepare:stubs && tsc",
     "prepare:stubs": "shx rm -f stubs/stub--* && npm run build:stub:win && npm run build:stub:mac && npm run build:stub:linux",
     "build:stub:win": "cross-env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -C stubs -ldflags \"-s -w\" -o stub--win32--x64 stub.go && npm run append:sig -- stubs/stub--win32--x64 && cross-env CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -C stubs -ldflags \"-s -w\" -o stub--win32--arm64 stub.go && npm run append:sig -- stubs/stub--win32--arm64",
     "build:stub:mac": "cross-env CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -C stubs -ldflags \"-s -w\" -o stub--darwin--x64 stub.go && npm run append:sig -- stubs/stub--darwin--x64 && cross-env CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -C stubs -ldflags \"-s -w\" -o stub--darwin--arm64 stub.go && npm run append:sig -- stubs/stub--darwin--arm64",
