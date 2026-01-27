@@ -2,18 +2,15 @@
 
 import path from "node:path";
 import url from "node:url";
-import os from "node:os";
 import stream from "node:stream/promises";
 import fs from "fs-extra";
-import { globbySync } from "globby";
+import { globby } from "globby";
 import cryptoRandomString from "crypto-random-string";
 import bash from "dedent";
-import dedent from "dedent";
 import archiver from "archiver";
 import * as commander from "commander";
 import process from "node:process";
 
-// Some default excludes
 const defaultExcludes = [
   ".*",
   "*.exe",
@@ -53,17 +50,6 @@ export default async function caxa({
   command,
   force = true,
   exclude = defaultExcludes,
-  filter = (() => {
-    if (!exclude.length) {
-      exclude = defaultExcludes;
-    }
-    const pathsToExclude = globbySync(exclude, {
-      expandDirectories: false,
-      onlyFiles: false,
-    }).map((pathToExclude: string) => path.normalize(pathToExclude));
-    return (pathToCopy: string) =>
-      !pathsToExclude.includes(path.normalize(pathToCopy));
-  })(),
   includeNode = true,
   stub = url.fileURLToPath(
     new URL(
@@ -75,7 +61,6 @@ export default async function caxa({
     path.basename(path.basename(path.basename(output, ".exe"), ".app"), ".sh"),
     cryptoRandomString({ length: 10, type: "alphanumeric" }).toLowerCase(),
   ),
-  removeBuildDirectory = true,
   uncompressionMessage,
 }: {
   input: string;
@@ -97,39 +82,145 @@ export default async function caxa({
   if (process.platform === "win32" && !output.endsWith(".exe"))
     throw new Error("Windows executable must end in ‘.exe’.");
 
-  const buildDirectory = path.join(
-    os.tmpdir(),
-    "caxa",
-    "builds",
-    cryptoRandomString({ length: 10, type: "alphanumeric" }).toLowerCase(),
-  );
-  await fs.copy(input, buildDirectory, { filter });
-  if (includeNode) {
-    const node = path.join(
-      buildDirectory,
-      "node_modules",
-      ".bin",
-      path.basename(process.execPath),
-    );
-    await fs.ensureDir(path.dirname(node));
-    await fs.copyFile(process.execPath, node);
-  }
-
   await fs.ensureDir(path.dirname(output));
   await fs.remove(output);
+
+  if (!exclude) exclude = defaultExcludes;
+  const files = await globby(["**/*", ...exclude.map((e) => `!${e}`)], {
+    cwd: input,
+    onlyFiles: true,
+    dot: true,
+    followSymbolicLinks: false,
+  });
+
+  interface Component {
+    group: string;
+    name: string;
+    version: string;
+    purl: string;
+    _rawDeps?: Record<string, string>;
+  }
+
+  interface DependencyGraphEntry {
+    ref: string;
+    dependsOn: string[];
+  }
+
+  const components: Component[] = [];
+  const purlLookup = new Map<string, string>();
+
+  for (const file of files) {
+    if (path.basename(file) === "package.json") {
+      try {
+        const pkg = await fs.readJson(path.join(input, file));
+        if (pkg.name && pkg.version) {
+          let name = pkg.name;
+          let namespace = "";
+          if (name.startsWith("@")) {
+            const parts = name.split("/");
+            namespace = parts[0];
+            name = parts[1];
+          }
+
+          let purl = "pkg:npm/";
+          if (namespace) {
+            purl += `${encodeURIComponent(namespace)}/`;
+          }
+          purl += `${name}@${pkg.version}`;
+
+          purlLookup.set(pkg.name, purl);
+
+          components.push({
+            group: namespace,
+            name: name,
+            version: pkg.version,
+            purl: purl,
+            _rawDeps: pkg.dependencies,
+          });
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
+  }
+
+  const dependencies: DependencyGraphEntry[] = [];
+
+  for (const comp of components) {
+    const childPurls: string[] = [];
+    if (comp._rawDeps) {
+      for (const depName of Object.keys(comp._rawDeps)) {
+        const resolvedPurl = purlLookup.get(depName);
+        if (resolvedPurl) {
+          childPurls.push(resolvedPurl);
+        }
+      }
+      delete comp._rawDeps;
+    }
+
+    if (childPurls.length > 0) {
+      dependencies.push({
+        ref: comp.purl,
+        dependsOn: childPurls,
+      });
+    }
+  }
+
+  await fs.writeJson(
+    path.join(path.dirname(output), "binary-metadata.json"),
+    {
+      components,
+      dependencies,
+    },
+    { spaces: 0 },
+  );
+
+  const appendApplicationPayload = async (destination: string, prefix = "") => {
+    const archive = archiver("tar", {
+      gzip: true,
+      gzipOptions: { level: 6 },
+    });
+    const outputStream = fs.createWriteStream(destination, { flags: "a" });
+    archive.pipe(outputStream);
+
+    for (const file of files) {
+      const absPath = path.join(input, file);
+      let name = path.join(prefix, file);
+      if (process.platform === "win32") {
+        name = name.replace(/\\/g, "/");
+      }
+      archive.file(absPath, { name });
+    }
+
+    if (includeNode) {
+      const nodePath = process.execPath;
+      let nodeDest = path.join(
+        prefix,
+        "node_modules",
+        ".bin",
+        path.basename(nodePath),
+      );
+      if (process.platform === "win32") {
+        nodeDest = nodeDest.replace(/\\/g, "/");
+      }
+      archive.file(nodePath, { name: nodeDest });
+    }
+
+    await archive.finalize();
+    await stream.finished(outputStream);
+  };
 
   if (output.endsWith(".app")) {
     if (process.platform !== "darwin")
       throw new Error(
         "macOS Application Bundles (.app) are supported in macOS only.",
       );
-    await fs.ensureDir(path.join(output, "Contents", "Resources"));
-    await fs.move(
-      buildDirectory,
-      path.join(output, "Contents", "Resources", "application"),
-    );
+
     await fs.ensureDir(path.join(output, "Contents", "MacOS"));
+    await fs.ensureDir(path.join(output, "Contents", "Resources"));
+
     const name = path.basename(output, ".app");
+
     await fs.writeFile(
       path.join(output, "Contents", "MacOS", name),
       bash`
@@ -138,95 +229,92 @@ export default async function caxa({
       ` + "\n",
       { mode: 0o755 },
     );
+
     await fs.writeFile(
       path.join(output, "Contents", "Resources", name),
       bash`
         #!/usr/bin/env sh
         ${command
           .map(
-            (part) =>
-              `"${part.replace(
-                /\{\{\s*caxa\s*\}\}/g,
-                `$(dirname "$0")/application`,
-              )}"`,
+            (p) =>
+              `"${p.replace(/\{\{\s*caxa\s*}}/g, `$(dirname "$0")/application`)}"`,
           )
           .join(" ")}
       ` + "\n",
       { mode: 0o755 },
     );
+
+    const appDest = path.join(output, "Contents", "Resources", "application");
+    await fs.ensureDir(appDest);
+
+    for (const file of files) {
+      const src = path.join(input, file);
+      const dest = path.join(appDest, file);
+      await fs.copy(src, dest);
+    }
+
+    if (includeNode) {
+      const nodeDest = path.join(
+        appDest,
+        "node_modules",
+        ".bin",
+        path.basename(process.execPath),
+      );
+      await fs.ensureDir(path.dirname(nodeDest));
+      await fs.copyFile(process.execPath, nodeDest);
+    }
   } else if (output.endsWith(".sh")) {
     if (process.platform === "win32")
       throw new Error("The Shell Stub (.sh) isn’t supported in Windows.");
-    let stub =
+
+    let shellStub =
       bash`
         #!/usr/bin/env sh
-        export CAXA_TEMPORARY_DIRECTORY="$(dirname $(mktemp))/caxa"
-        export CAXA_EXTRACTION_ATTEMPT=-1
+        export CAXA_TMP="$(dirname $(mktemp))/caxa"
+        export CAXA_ID="${identifier}"
         while true
         do
-          export CAXA_EXTRACTION_ATTEMPT=$(( CAXA_EXTRACTION_ATTEMPT + 1 ))
-          export CAXA_LOCK="$CAXA_TEMPORARY_DIRECTORY/locks/${identifier}/$CAXA_EXTRACTION_ATTEMPT"
-          export CAXA_APPLICATION_DIRECTORY="$CAXA_TEMPORARY_DIRECTORY/applications/${identifier}/$CAXA_EXTRACTION_ATTEMPT"
-          if [ -d "$CAXA_APPLICATION_DIRECTORY" ]
-          then
-            if [ -d "$CAXA_LOCK" ]
-            then
-              continue
-            else
-              break
-            fi
-          else
-            ${
-              uncompressionMessage === undefined
-                ? bash``
-                : bash`echo "${uncompressionMessage}" >&2`
-            }
-            mkdir -p "$CAXA_LOCK"
-            mkdir -p "$CAXA_APPLICATION_DIRECTORY"
-            tail -n+{{caxa-number-of-lines}} "$0" | tar -xz -C "$CAXA_APPLICATION_DIRECTORY"
-            rmdir "$CAXA_LOCK"
-            break
+          export CAXA_LOCK="$CAXA_TMP/locks/$CAXA_ID"
+          export CAXA_APP="$CAXA_TMP/apps/$CAXA_ID"
+          if [ -d "$CAXA_APP" ] && [ ! -d "$CAXA_LOCK" ]; then
+             break
           fi
+          
+          ${uncompressionMessage ? bash`echo "${uncompressionMessage}" >&2` : ""}
+          mkdir -p "$CAXA_LOCK" "$CAXA_APP"
+          
+          # Use atomic extraction pattern
+          tail -n+{{lines}} "$0" | tar -xz -C "$CAXA_APP"
+          
+          rmdir "$CAXA_LOCK"
+          break
         done
         exec ${command
-          .map(
-            (commandPart) =>
-              `"${commandPart.replace(
-                /\{\{\s*caxa\s*\}\}/g,
-                `"$CAXA_APPLICATION_DIRECTORY"`,
-              )}"`,
-          )
+          .map((p) => `"${p.replace(/\{\{\s*caxa\s*}}/g, `"$CAXA_APP"`)}"`)
           .join(" ")} "$@"
       ` + "\n";
-    stub = stub.replace(
-      "{{caxa-number-of-lines}}",
-      String(stub.split("\n").length),
+
+    shellStub = shellStub.replace(
+      "{{lines}}",
+      String(shellStub.split("\n").length),
     );
-    await fs.writeFile(output, stub, { mode: 0o755 });
-    await appendTarballOfBuildDirectoryToOutput();
+    await fs.writeFile(output, shellStub, { mode: 0o755 });
+    await appendApplicationPayload(output);
   } else {
     if (!(await fs.pathExists(stub)))
       throw new Error(
         `Stub not found (your operating system / architecture may be unsupported): ‘${stub}’`,
       );
+
     await fs.copyFile(stub, output);
     await fs.chmod(output, 0o755);
-    await appendTarballOfBuildDirectoryToOutput();
+
+    await appendApplicationPayload(output);
+
     await fs.appendFile(
       output,
       "\n" + JSON.stringify({ identifier, command, uncompressionMessage }),
     );
-  }
-
-  if (removeBuildDirectory) await fs.remove(buildDirectory);
-
-  async function appendTarballOfBuildDirectoryToOutput(): Promise<void> {
-    const archive = archiver("tar", { gzip: true });
-    const archiveStream = fs.createWriteStream(output, { flags: "a" });
-    archive.pipe(archiveStream);
-    archive.directory(buildDirectory, false);
-    await archive.finalize();
-    await stream.finished(archiveStream);
   }
 }
 
@@ -234,106 +322,37 @@ if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
   await commander.program
     .name("caxa")
     .description("Package Node.js applications into executable binaries")
-    .requiredOption(
-      "-i, --input <input>",
-      "[Required] The input directory to package.",
-    )
+    .requiredOption("-i, --input <input>", "Input directory to package.")
     .requiredOption(
       "-o, --output <output>",
-      "[Required] The path where the executable will be produced. On Windows, must end in ‘.exe’. In macOS and Linux, may have no extension to produce regular binary. In macOS and Linux, may end in ‘.sh’ to use the Shell Stub, which is a bit smaller, but depends on some tools being installed on the end-user machine, for example, ‘tar’, ‘tail’, and so forth. In macOS, may end in ‘.app’ to generate a macOS Application Bundle.",
+      "Path where the executable will be produced.",
     )
-    .option("-F, --no-force", "[Advanced] Don’t overwrite output if it exists.")
-    .option(
-      "-e, --exclude <path...>",
-      `[Advanced] Paths to exclude from the build. The paths are passed to https://github.com/sindresorhus/globby and paths that match will be excluded. [Super-Advanced, Please don’t use] If you wish to emulate ‘--include’, you may use ‘--exclude "*" ".*" "!path-to-include" ...’. The problem with ‘--include’ is that if you change your project structure but forget to change the caxa invocation, then things will subtly fail only in the packaged version.`,
-    )
-    .option(
-      "-N, --no-include-node",
-      "[Advanced] Don’t copy the Node.js executable to ‘{{caxa}}/node_modules/.bin/node’.",
-    )
-    .option("-s, --stub <path>", "[Advanced] Path to the stub.")
-    .option(
-      "--identifier <identifier>",
-      "[Advanced] Build identifier, which is part of the path in which the application will be unpacked.",
-    )
+    .option("-F, --no-force", "Don’t overwrite output if it exists.")
+    .option("-e, --exclude <path...>", "Paths to exclude from the build.")
+    .option("-N, --no-include-node", "Don’t copy the Node.js executable.")
+    .option("-s, --stub <path>", "Path to the stub.")
+    .option("--identifier <id>", "Build identifier.")
     .option(
       "-B, --no-remove-build-directory",
-      "[Advanced] Remove the build directory after the build.",
+      "Ignored in v2 (streaming build).",
     )
     .option(
-      "-m, --uncompression-message <message>",
-      "[Advanced] A message to show when uncompressing, for example, ‘This may take a while to run the first time, please wait...’.",
+      "-m, --uncompression-message <msg>",
+      "Message to show during extraction.",
     )
-    .argument(
-      "<command...>",
-      "The command to run and optional arguments to pass to the command every time the executable is called. Paths must be absolute. The ‘{{caxa}}’ placeholder is substituted for the folder from which the package runs. The ‘node’ executable is available at ‘{{caxa}}/node_modules/.bin/node’. Use double quotes to delimit the command and each argument.",
-    )
+    .argument("<command...>", "Command to run.")
     .version(
       JSON.parse(
         await fs.readFile(new URL("../package.json", import.meta.url), "utf8"),
       ).version,
     )
-    .addHelpText(
-      "after",
-      "\n" +
-        dedent`
-          Examples:
-            Windows:
-            > caxa --input "examples/echo-command-line-parameters" --output "echo-command-line-parameters.exe" -- "{{caxa}}/node_modules/.bin/node" "{{caxa}}/index.mjs" "some" "embedded arguments" "--an-option-thats-part-of-the-command"
-
-            macOS/Linux:
-            $ caxa --input "examples/echo-command-line-parameters" --output "echo-command-line-parameters" -- "{{caxa}}/node_modules/.bin/node" "{{caxa}}/index.mjs" "some" "embedded arguments" "--an-option-thats-part-of-the-command"
-
-            macOS/Linux (Shell Stub):
-            $ caxa --input "examples/echo-command-line-parameters" --output "echo-command-line-parameters.sh" -- "{{caxa}}/node_modules/.bin/node" "{{caxa}}/index.mjs" "some" "embedded arguments" "--an-option-thats-part-of-the-command"
-
-            macOS (Application Bundle):
-            $ caxa --input "examples/echo-command-line-parameters" --output "Echo Command Line Parameters.app" -- "{{caxa}}/node_modules/.bin/node" "{{caxa}}/index.mjs" "some" "embedded arguments" "--an-option-thats-part-of-the-command"
-        `,
-    )
-    .action(
-      async (
-        command: string[],
-        {
-          input,
-          output,
-          force,
-          exclude,
-          includeNode,
-          stub,
-          identifier,
-          removeBuildDirectory,
-          uncompressionMessage,
-        }: {
-          input: string;
-          output: string;
-          force?: boolean;
-          exclude?: string[];
-          includeNode?: boolean;
-          stub?: string;
-          identifier?: string;
-          removeBuildDirectory?: boolean;
-          uncompressionMessage?: string;
-        },
-      ) => {
-        try {
-          await caxa({
-            input,
-            output,
-            command,
-            force,
-            exclude,
-            includeNode,
-            stub,
-            identifier,
-            removeBuildDirectory,
-            uncompressionMessage,
-          });
-        } catch (error: any) {
-          console.error(error.message);
-          process.exit(1);
-        }
-      },
-    )
+    .action(async (command, opts) => {
+      try {
+        await caxa({ command, ...opts });
+      } catch (error: any) {
+        console.error(error.message);
+        process.exit(1);
+      }
+    })
     .showHelpAfterError()
     .parseAsync();
