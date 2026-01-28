@@ -181,14 +181,19 @@ export default async function caxa({
     });
     const outputStream = fs.createWriteStream(destination, { flags: "a" });
     archive.pipe(outputStream);
-
     for (const file of files) {
       const absPath = path.join(input, file);
       let name = path.join(prefix, file);
       if (process.platform === "win32") {
         name = name.replace(/\\/g, "/");
       }
-      archive.file(absPath, { name });
+      const stats = await fs.lstat(absPath);
+      if (stats.isSymbolicLink()) {
+        const linkTarget = await fs.readlink(absPath);
+        archive.symlink(name, linkTarget);
+      } else {
+        archive.file(absPath, { name, stats });
+      }
     }
 
     if (includeNode) {
