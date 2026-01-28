@@ -178,7 +178,6 @@ export default async function caxa({
   const appendApplicationPayload = async (destination: string, prefix = "") => {
     const archive = archiver("tar", {
       gzip: true,
-      gzipOptions: { level: 6 },
     });
     const outputStream = fs.createWriteStream(destination, { flags: "a" });
     archive.pipe(outputStream);
@@ -282,10 +281,7 @@ export default async function caxa({
           
           ${uncompressionMessage ? bash`echo "${uncompressionMessage}" >&2` : ""}
           mkdir -p "$CAXA_LOCK" "$CAXA_APP"
-          
-          # Use atomic extraction pattern
           tail -n+{{lines}} "$0" | tar -xz -C "$CAXA_APP"
-          
           rmdir "$CAXA_LOCK"
           break
         done
