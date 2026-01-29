@@ -29,6 +29,7 @@ When the binary is executed, the stub reads its own file content, locates the pa
 - **Zero Config**: No need to manually define assets.
 - **Native Modules**: Fully supports projects with native C++ bindings (`.node` files).
 - **No Magic**: Does not patch `require()`. Filesystem access works exactly as it does in a standard Node.js environment.
+- **UPX Compression**: Optional post-build compression with [UPX](https://upx.github.io/) to further reduce binary size.
 
 ### Installation
 
@@ -55,6 +56,18 @@ Call `caxa` from the command line:
 $ npx caxa --input "." --output "my-app" -- "{{caxa}}/node_modules/.bin/node" "{{caxa}}/dist/index.js"
 ```
 
+To create a smaller binary, use the --upx flag. You must have upx installed on your system.
+
+```console
+$ npx caxa --input "." --output "my-app" --upx --upx-args="--best" -- "{{caxa}}/node_modules/.bin/node" "{{caxa}}/dist/index.js"
+```
+
+pnpm is also supported. Below is how `cdxgen` SEA binaries gets created.
+
+```
+$ pnpm --package=@appthreat/caxa dlx caxa --input . --output cdxgen -- "{{caxa}}/node_modules/.bin/node" "{{caxa}}/bin/cdxgen.js"
+```
+
 ### CLI Reference
 
 ```text
@@ -76,6 +89,8 @@ Options:
   --identifier <identifier>              Build identifier used for the extraction path.
   -B, --no-remove-build-directory        [Legacy] Ignored in v2 due to streaming build architecture.
   -m, --uncompression-message <message>  A message to show to the user while uncompressing.
+  --upx                                  Compress the output binary with UPX.
+  --upx-args <args...>                   Arguments to pass to UPX (e.g., '--best --lzma').
   -V, --version                          output the version number
   -h, --help                             display help for command
 ```
@@ -97,6 +112,8 @@ import caxa from "@appthreat/caxa";
       "--custom-flag",
     ],
     exclude: ["*.log", "tmp/**"],
+    upx: true,
+    upxArgs: ["--best"],
   });
 })();
 ```

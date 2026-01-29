@@ -10,6 +10,35 @@ import bash from "dedent";
 import archiver from "archiver";
 import * as commander from "commander";
 import process from "node:process";
+import { spawn } from "node:child_process";
+
+async function runUpx(file: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const upxProcess = spawn("upx", [...args, file], {
+      stdio: "inherit",
+    });
+
+    upxProcess.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") {
+        reject(
+          new Error(
+            "UPX command not found. Please install UPX and ensure it is in your system's PATH.",
+          ),
+        );
+      } else {
+        reject(error);
+      }
+    });
+
+    upxProcess.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`UPX process exited with code ${code}`));
+      } else {
+        resolve();
+      }
+    });
+  });
+}
 
 const defaultExcludes = [
   ".*",
@@ -62,6 +91,8 @@ export default async function caxa({
     cryptoRandomString({ length: 10, type: "alphanumeric" }).toLowerCase(),
   ),
   uncompressionMessage,
+  upx = false,
+  upxArgs = [],
 }: {
   input: string;
   output: string;
@@ -74,6 +105,8 @@ export default async function caxa({
   identifier?: string;
   removeBuildDirectory?: boolean;
   uncompressionMessage?: string;
+  upx?: boolean;
+  upxArgs?: string[];
 }): Promise<void> {
   if (!(await fs.pathExists(input)) || !(await fs.lstat(input)).isDirectory())
     throw new Error(`Input isn’t a directory: ‘${input}’.`);
@@ -317,6 +350,12 @@ export default async function caxa({
       "\n" + JSON.stringify({ identifier, command, uncompressionMessage }),
     );
   }
+  if (upx && !output.endsWith(".app") && !output.endsWith(".sh")) {
+    const processedArgs = upxArgs
+      .flatMap((arg) => arg.split(/\s+/))
+      .filter((arg) => arg.length > 0);
+    await runUpx(output, processedArgs);
+  }
 }
 
 if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
@@ -340,6 +379,11 @@ if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
     .option(
       "-m, --uncompression-message <msg>",
       "Message to show during extraction.",
+    )
+    .option("--upx", "Compress the output binary with UPX.")
+    .option(
+      "--upx-args <args...>",
+      "Arguments to pass to UPX (e.g., '--best --lzma').",
     )
     .argument("<command...>", "Command to run.")
     .version(
