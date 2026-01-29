@@ -119,10 +119,11 @@ export default async function caxa({
   await fs.remove(output);
 
   if (!exclude) exclude = defaultExcludes;
-  const files = await globby(["**/*", ...exclude.map((e) => `!${e}`)], {
+  const files = await globby(["**/*"], {
     cwd: input,
     onlyFiles: true,
     dot: true,
+    ignore: exclude,
     followSymbolicLinks: false,
   });
 
