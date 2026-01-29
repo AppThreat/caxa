@@ -342,19 +342,17 @@ export default async function caxa({
 
     await fs.copyFile(stub, output);
     await fs.chmod(output, 0o755);
-
+    if (upx && !output.endsWith(".app") && !output.endsWith(".sh")) {
+      const processedArgs = upxArgs
+        .flatMap((arg) => arg.split(/\s+/))
+        .filter((arg) => arg.length > 0);
+      await runUpx(output, processedArgs);
+    }
     await appendApplicationPayload(output);
-
     await fs.appendFile(
       output,
       "\n" + JSON.stringify({ identifier, command, uncompressionMessage }),
     );
-  }
-  if (upx && !output.endsWith(".app") && !output.endsWith(".sh")) {
-    const processedArgs = upxArgs
-      .flatMap((arg) => arg.split(/\s+/))
-      .filter((arg) => arg.length > 0);
-    await runUpx(output, processedArgs);
   }
 }
 
