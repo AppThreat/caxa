@@ -348,6 +348,7 @@ export default async function caxa({
         .filter((arg) => arg.length > 0);
       await runUpx(output, processedArgs);
     }
+    await fs.appendFile(output, "\nCAXACAXACAXA\n");
     await appendApplicationPayload(output);
     await fs.appendFile(
       output,
