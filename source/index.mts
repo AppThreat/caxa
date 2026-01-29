@@ -213,6 +213,8 @@ export default async function caxa({
       gzip: true,
     });
     const outputStream = fs.createWriteStream(destination, { flags: "a" });
+    const tempFilesCleanup: string[] = [];
+
     archive.pipe(outputStream);
     for (const file of files) {
       const absPath = path.join(input, file);
@@ -240,11 +242,39 @@ export default async function caxa({
       if (process.platform === "win32") {
         nodeDest = nodeDest.replace(/\\/g, "/");
       }
-      archive.file(nodePath, { name: nodeDest });
+
+      if (upx) {
+        const tempNodeName = `node-${cryptoRandomString({ length: 10 })}${process.platform === "win32" ? ".exe" : ""}`;
+        const tempNodePath = path.join(path.dirname(output), tempNodeName);
+
+        try {
+          await fs.copyFile(nodePath, tempNodePath);
+          await fs.chmod(tempNodePath, 0o755);
+
+          const processedArgs = upxArgs
+            .flatMap((arg) => arg.split(/\s+/))
+            .filter((arg) => arg.length > 0);
+
+          await runUpx(tempNodePath, processedArgs);
+
+          archive.file(tempNodePath, { name: nodeDest });
+          tempFilesCleanup.push(tempNodePath);
+        } catch (err) {
+          throw new Error(
+            `Failed to compress Node.js binary: ${(err as Error).message}`,
+          );
+        }
+      } else {
+        archive.file(nodePath, { name: nodeDest });
+      }
     }
 
     await archive.finalize();
     await stream.finished(outputStream);
+
+    for (const tempFile of tempFilesCleanup) {
+      await fs.remove(tempFile);
+    }
   };
 
   if (output.endsWith(".app")) {

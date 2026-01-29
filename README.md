@@ -7,21 +7,40 @@ This is a high-performance fork of `caxa` (v3.0.1) maintained by AppThreat. Vers
 ### Key Improvements in v2
 
 - **Streaming Builds**: Eliminated the intermediate build directory. Files are streamed directly from the source to the compressed archive, halving disk I/O during the packaging process.
+- **Aggressive Binary Minimization**: When the `--upx` flag is used, caxa now compresses the bundled Node.js executable _before_ archiving it. This, combined with the compressed stub, results in significantly smaller final binaries (often reducing size by 30-50MB compared to standard builds).
 - **High-Performance Decompression**: Switched the runtime stub to use SIMD-accelerated Gzip (`klauspost/compress/gzip`). This significantly reduces the "Time to First Hello World" compared to standard implementations.
 - **Parallel Extraction & Smart Buffering**: The runtime stub now utilizes a worker pool to extract small files (like `node_modules`) concurrently, maximizing disk I/O saturation. Large files (>1MB) are streamed synchronously to prevent memory spikes.
 - **Atomic Extraction**: Implemented a lock-based extraction mechanism in the runtime stub. This prevents corruption if the application process is killed during the initial extraction.
 - **SBOM Ready**: Automatically generates a `binary-metadata.json` sidecar file containing a full dependency graph (components and relationship tree). This facilitates high-fidelity SBOM generation using tools like [cdxgen](https://github.com/cdxgen/cdxgen).
-- **Optimized Defaults**: Includes robust default exclusion patterns to prevent bundling git history, lock files, tests, and documentation, resulting in smaller binaries.
 
 ### How it Works
 
-caxa does not compile Node.js from source or mess with V8 internals. It works by concatenating three components into a single file:
+caxa does not compile Node.js from source or mess with V8 internals. It works by creating a self-extracting executable with a specific structure.
 
-1.  **Go Stub**: A small, pre-compiled Go binary responsible for bootstrapping.
-2.  **Payload**: A Gzip-compressed TAR archive containing your application and the Node.js executable.
-3.  **Footer**: A JSON configuration block defining the command to execute.
+#### Binary Anatomy
 
-When the binary is executed, the stub reads its own file content, locates the payload, extracts it to a temporary directory (if not already cached), and executes the Node.js process.
+Whether you use UPX or not, the final binary structure follows this layout:
+
+```text
++-----------------------------+
+|          Go Stub            |  <-- The executable entry point.
+| (Native Code / UPX Packed)  |      Responsible for bootstrapping.
++-----------------------------+
+|       \nCAXACAXACAXA\n      |  <-- Magic Separator (Plaintext).
++-----------------------------+
+|     Application Payload     |  <-- Your project files + Node.js binary.
+|        (tar + gzip)         |      Streamed directly to disk at runtime.
++-----------------------------+
+|        JSON Config          |  <-- Metadata, Command arguments, & Build ID.
++-----------------------------+
+```
+
+1.  **Go Stub**: A pre-compiled Go binary. If `--upx` is used, this section is compressed.
+2.  **Magic Separator**: A specific byte sequence that allows the Stub to locate the start of the payload, even if the Stub itself was modified by UPX.
+3.  **Payload**: A Gzip-compressed TAR archive containing your application and the Node.js executable. **If `--upx` is enabled, the internal Node.js executable is also UPX-compressed**, drastically reducing the payload size.
+4.  **Footer**: A JSON block at the very end of the file.
+
+When executed, the Stub reads its own file content, scans for the Magic Separator to find the Payload, extracts it to a temporary directory (if not already cached), and executes the Node.js process with the arguments defined in the Footer.
 
 ### Features
 
@@ -29,7 +48,7 @@ When the binary is executed, the stub reads its own file content, locates the pa
 - **Zero Config**: No need to manually define assets.
 - **Native Modules**: Fully supports projects with native C++ bindings (`.node` files).
 - **No Magic**: Does not patch `require()`. Filesystem access works exactly as it does in a standard Node.js environment.
-- **UPX Compression**: Optional post-build compression with [UPX](https://upx.github.io/) to further reduce binary size.
+- **Double UPX Compression**: Optional post-build compression with [UPX](https://upx.github.io/). This compresses both the Go runtime stub **and** the bundled Node.js executable.
 
 ### Installation
 
@@ -89,7 +108,7 @@ Options:
   --identifier <identifier>              Build identifier used for the extraction path.
   -B, --no-remove-build-directory        [Legacy] Ignored in v2 due to streaming build architecture.
   -m, --uncompression-message <message>  A message to show to the user while uncompressing.
-  --upx                                  Compress the output binary with UPX.
+  --upx                                  Compress the output binary (and included Node.js) with UPX.
   --upx-args <args...>                   Arguments to pass to UPX (e.g., '--best --lzma').
   -V, --version                          output the version number
   -h, --help                             display help for command
