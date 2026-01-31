@@ -252,8 +252,10 @@ export default async function caxa({
 
   const components: Component[] = [];
   const purlLookup = new Map<string, string>();
-  const runtimeInfo = getRuntimeInformation();
-  components.push(runtimeInfo);
+  if (includeNode) {
+    const runtimeInfo = getRuntimeInformation();
+    components.push(runtimeInfo);
+  }
   for (const file of files) {
     if (path.basename(file) === "package.json") {
       try {
