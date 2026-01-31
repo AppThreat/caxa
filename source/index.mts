@@ -73,6 +73,116 @@ const defaultExcludes = [
   "jest.config.js",
 ];
 
+/**
+ * Get information about the runtime.
+ *
+ * @returns {Object} Object containing the name and version of the runtime
+ */
+export function getRuntimeInformation() {
+  const runtimeInfo: any = {
+    group: undefined,
+    name: undefined,
+    version: undefined,
+    runtime: undefined,
+    purl: undefined,
+    scope: "required",
+  };
+  // @ts-ignore
+  if (globalThis.Deno?.version?.deno) {
+    runtimeInfo.name = "deno";
+    runtimeInfo.runtime = "Deno";
+    // @ts-ignore
+    runtimeInfo.version = globalThis.Deno.version.deno;
+    runtimeInfo.purl = `pkg:generic/${runtimeInfo.name}@${runtimeInfo.version}`;
+    runtimeInfo["bom-ref"] = runtimeInfo.purl;
+    // @ts-ignore
+  } else if (globalThis.Bun?.version) {
+    runtimeInfo.name = "bun";
+    runtimeInfo.runtime = "Bun";
+    // @ts-ignore
+    runtimeInfo.version = globalThis.Bun.version;
+    runtimeInfo.purl = `pkg:generic/${runtimeInfo.name}@${runtimeInfo.version}`;
+    runtimeInfo["bom-ref"] = runtimeInfo.purl;
+  } else if (globalThis.process?.versions?.node) {
+    runtimeInfo.name = "node";
+    runtimeInfo.runtime = "Node.js";
+    runtimeInfo.version = globalThis.process.versions.node;
+    runtimeInfo.purl = `pkg:generic/${runtimeInfo.name}@${runtimeInfo.version}`;
+    runtimeInfo["bom-ref"] = runtimeInfo.purl;
+    const report = process.report.getReport();
+    // @ts-ignore
+    const nodeSourceUrl = report?.header?.release?.sourceUrl;
+    if (nodeSourceUrl) {
+      runtimeInfo.externalReferences = [
+        {
+          url: nodeSourceUrl,
+          type: "source-distribution",
+          comment: "Node.js release url",
+        },
+      ];
+    }
+    // Collect the bundled components in node.js
+    // @ts-ignore
+    if (report?.header?.componentVersions) {
+      const nodeBundledComponents = [];
+      for (const [name, version] of Object.entries(
+        // @ts-ignore
+        report.header.componentVersions,
+      )) {
+        if (name === "node") {
+          continue;
+        }
+        const apkg = {
+          name,
+          version,
+          description: `Bundled with Node.js ${runtimeInfo.version}`,
+          type: "library",
+          scope: "excluded",
+          purl: `pkg:generic/${name}@${version}`,
+          "bom-ref": `pkg:generic/${name}@${version}`,
+        };
+        if (nodeSourceUrl) {
+          // @ts-ignore
+          apkg.externalReferences = [
+            {
+              url: nodeSourceUrl,
+              type: "source-distribution",
+              comment: "Node.js release url",
+            },
+          ];
+        }
+        nodeBundledComponents.push(apkg);
+      }
+      if (nodeBundledComponents.length) {
+        runtimeInfo.components = nodeBundledComponents;
+      }
+    }
+    // @ts-ignore
+    if (report.sharedObjects) {
+      const osSharedObjects = [];
+      // @ts-ignore
+      for (const aso of report.sharedObjects) {
+        const name = path.basename(aso);
+        if (name === "node") {
+          continue;
+        }
+        const apkg = {
+          name,
+          type: "library",
+          scope: "excluded",
+          purl: `pkg:generic/${name}#${aso}`,
+          "bom-ref": `pkg:generic/${name}`,
+        };
+        osSharedObjects.push(apkg);
+      }
+      if (osSharedObjects.length) {
+        runtimeInfo.components = osSharedObjects;
+      }
+    }
+  }
+  return runtimeInfo;
+}
+
 export default async function caxa({
   input,
   output,
@@ -142,7 +252,10 @@ export default async function caxa({
 
   const components: Component[] = [];
   const purlLookup = new Map<string, string>();
-
+  if (includeNode) {
+    const runtimeInfo = getRuntimeInformation();
+    components.push(runtimeInfo);
+  }
   for (const file of files) {
     if (path.basename(file) === "package.json") {
       try {

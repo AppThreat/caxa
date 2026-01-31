@@ -98,6 +98,11 @@ test("caxa v2 e2e: globby exclude patterns and directories", async (t) => {
     if (fs.existsSync("binary-metadata.json")) {
       fs.renameSync("binary-metadata.json", metadataPath);
     }
+    const metadataObj = JSON.parse(fs.readFileSync(metadataPath));
+    assert.ok(metadataObj.components);
+    assert.strictEqual(metadataObj.components[0].name, "node");
+    assert.ok(metadataObj.components[0].version);
+    assert.ok(metadataObj.dependencies);
   } catch (e) {
     assert.fail("Build process failed with exit code " + e.status);
   }
