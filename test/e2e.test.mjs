@@ -99,6 +99,11 @@ test("caxa v2 e2e: globby exclude patterns and directories", async (t) => {
       fs.renameSync("binary-metadata.json", metadataPath);
     }
     const metadataObj = JSON.parse(fs.readFileSync(metadataPath));
+    assert.ok(metadataObj.parentComponent);
+    assert.equal(
+      metadataObj.parentComponent.purl,
+      "pkg:generic/test-output-excludes",
+    );
     assert.ok(metadataObj.components);
     assert.strictEqual(metadataObj.components[0].name, "node");
     assert.ok(metadataObj.components[0].version);
