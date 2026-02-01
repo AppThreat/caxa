@@ -187,6 +187,7 @@ export default async function caxa({
   input,
   output,
   command,
+  metadataFile = "binary-metadata.json",
   force = true,
   exclude = defaultExcludes,
   includeNode = true,
@@ -207,6 +208,7 @@ export default async function caxa({
   input: string;
   output: string;
   command: string[];
+  metadataFile: string;
   force?: boolean;
   exclude?: string[];
   filter?: fs.CopyFilterSync | fs.CopyFilterAsync;
@@ -240,8 +242,11 @@ export default async function caxa({
   interface Component {
     group: string;
     name: string;
+    description: string;
+    license: string;
     version: string;
     purl: string;
+    author: string;
     _rawDeps?: Record<string, string>;
   }
 
@@ -249,7 +254,14 @@ export default async function caxa({
     ref: string;
     dependsOn: string[];
   }
-
+  const parentName = path.basename(output).replace(path.extname(output), "");
+  const parentComponent = {
+    group: "",
+    name: parentName,
+    version: undefined,
+    purl: `pkg:generic/${parentName}`,
+    "bom-ref": `pkg:generic/${parentName}`,
+  };
   const components: Component[] = [];
   const purlLookup = new Map<string, string>();
   if (includeNode) {
@@ -274,14 +286,22 @@ export default async function caxa({
             purl += `${encodeURIComponent(namespace)}/`;
           }
           purl += `${name}@${pkg.version}`;
-
           purlLookup.set(pkg.name, purl);
-
+          const author = pkg.author;
+          const authorString =
+            author instanceof Object
+              ? `${author.name}${author.email ? ` <${author.email}>` : ""}${
+                  author.url ? ` (${author.url})` : ""
+                }`
+              : author;
           components.push({
             group: namespace,
             name: name,
+            description: pkg.description,
+            license: pkg.license,
             version: pkg.version,
             purl: purl,
+            author: authorString,
             _rawDeps: pkg.dependencies,
           });
         }
@@ -304,7 +324,6 @@ export default async function caxa({
       }
       delete comp._rawDeps;
     }
-
     if (childPurls.length > 0) {
       dependencies.push({
         ref: comp.purl,
@@ -312,10 +331,10 @@ export default async function caxa({
       });
     }
   }
-
   await fs.writeJson(
-    path.join(path.dirname(output), "binary-metadata.json"),
+    path.join(path.dirname(output), metadataFile),
     {
+      parentComponent,
       components,
       dependencies,
     },
@@ -509,6 +528,11 @@ if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
     .requiredOption(
       "-o, --output <output>",
       "Path where the executable will be produced.",
+    )
+    .option(
+      "--metadata-file",
+      "Metadata file name for capturing npm components and dependencies in the bundled binary.",
+      "binary-metadata.json",
     )
     .option("-F, --no-force", "Don’t overwrite output if it exists.")
     .option("-e, --exclude <path...>", "Paths to exclude from the build.")
