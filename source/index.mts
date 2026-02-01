@@ -186,8 +186,8 @@ export function getRuntimeInformation() {
 export default async function caxa({
   input,
   output,
-  command,
   metadataFile = "binary-metadata.json",
+  command,
   force = true,
   exclude = defaultExcludes,
   includeNode = true,
@@ -207,8 +207,8 @@ export default async function caxa({
 }: {
   input: string;
   output: string;
-  command: string[];
   metadataFile: string;
+  command: string[];
   force?: boolean;
   exclude?: string[];
   filter?: fs.CopyFilterSync | fs.CopyFilterAsync;
@@ -530,7 +530,7 @@ if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
       "Path where the executable will be produced.",
     )
     .option(
-      "--metadata-file",
+      "--metadata-file <path>",
       "Metadata file name for capturing npm components and dependencies in the bundled binary.",
       "binary-metadata.json",
     )
