@@ -85,6 +85,7 @@ export function getRuntimeInformation() {
     version: undefined,
     runtime: undefined,
     purl: undefined,
+    bomRef: undefined,
     scope: "required",
   };
   // @ts-ignore
@@ -246,6 +247,7 @@ export default async function caxa({
     license: string;
     version: string;
     purl: string;
+    "bom-ref": string;
     author: string;
     _rawDeps?: Record<string, string>;
   }
@@ -263,7 +265,7 @@ export default async function caxa({
     "bom-ref": `pkg:generic/${parentName}`,
   };
   const components: Component[] = [];
-  const purlLookup = new Map<string, string>();
+  const bomRefLookup = new Map<string, string>();
   if (includeNode) {
     const runtimeInfo = getRuntimeInformation();
     components.push(runtimeInfo);
@@ -282,11 +284,14 @@ export default async function caxa({
           }
 
           let purl = "pkg:npm/";
+          let bomRef = "pkg:npm/";
           if (namespace) {
             purl += `${encodeURIComponent(namespace)}/`;
+            bomRef += `${namespace}/`;
           }
           purl += `${name}@${pkg.version}`;
-          purlLookup.set(pkg.name, purl);
+          bomRef += `${name}@${pkg.version}`;
+          bomRefLookup.set(pkg.name, bomRef);
           const author = pkg.author;
           const authorString =
             author instanceof Object
@@ -301,6 +306,7 @@ export default async function caxa({
             license: pkg.license,
             version: pkg.version,
             purl: purl,
+            "bom-ref": bomRef,
             author: authorString,
             _rawDeps: pkg.dependencies,
           });
@@ -314,20 +320,20 @@ export default async function caxa({
   const dependencies: DependencyGraphEntry[] = [];
 
   for (const comp of components) {
-    const childPurls: string[] = [];
+    const childRefs: string[] = [];
     if (comp._rawDeps) {
       for (const depName of Object.keys(comp._rawDeps)) {
-        const resolvedPurl = purlLookup.get(depName);
-        if (resolvedPurl) {
-          childPurls.push(resolvedPurl);
+        const resolvedRef = bomRefLookup.get(depName);
+        if (resolvedRef) {
+          childRefs.push(resolvedRef);
         }
       }
       delete comp._rawDeps;
     }
-    if (childPurls.length > 0) {
+    if (childRefs.length > 0) {
       dependencies.push({
-        ref: comp.purl,
-        dependsOn: childPurls,
+        ref: comp["bom-ref"],
+        dependsOn: childRefs,
       });
     }
   }
