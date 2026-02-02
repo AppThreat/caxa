@@ -88,29 +88,25 @@ test("caxa v2 e2e: globby exclude patterns and directories", async (t) => {
 
   fs.writeFileSync(path.join(fixtureDir, "index.js"), runtimeScript);
 
-  try {
-    const excludes = `--exclude "secrets" "**/*.log" "nested/deep/ignored"`;
+  const excludes = `--exclude "secrets" "**/*.log" "nested/deep/ignored"`;
 
-    const cmd = `node build/index.mjs -i "${fixtureDir}" -o "${outputBin}" ${excludes} -- "{{caxa}}/node_modules/.bin/node" "{{caxa}}/index.js"`;
+  const cmd = `node build/index.mjs -i "${fixtureDir}" -o "${outputBin}" ${excludes} -- "{{caxa}}/node_modules/.bin/node" "{{caxa}}/index.js"`;
 
-    execSync(cmd, { stdio: "inherit" });
+  execSync(cmd, { stdio: "inherit" });
 
-    if (fs.existsSync("binary-metadata.json")) {
-      fs.renameSync("binary-metadata.json", metadataPath);
-    }
-    const metadataObj = JSON.parse(fs.readFileSync(metadataPath));
-    assert.ok(metadataObj.parentComponent);
-    assert.equal(
-      metadataObj.parentComponent.purl,
-      "pkg:generic/test-output-excludes",
-    );
-    assert.ok(metadataObj.components);
-    assert.strictEqual(metadataObj.components[0].name, "node");
-    assert.ok(metadataObj.components[0].version);
-    assert.ok(metadataObj.dependencies);
-  } catch (e) {
-    assert.fail("Build process failed with exit code " + e.status);
+  if (fs.existsSync("binary-metadata.json")) {
+    fs.renameSync("binary-metadata.json", metadataPath);
   }
+  const metadataObj = JSON.parse(fs.readFileSync(metadataPath));
+  assert.ok(metadataObj.parentComponent);
+  assert.equal(
+    metadataObj.parentComponent["bom-ref"],
+    "pkg:generic/@appthreat/test-app@2.5.0",
+  );
+  assert.ok(metadataObj.components);
+  assert.strictEqual(metadataObj.components[0].name, "node");
+  assert.ok(metadataObj.components[0].version);
+  assert.ok(metadataObj.dependencies);
 
   let filesFound = [];
   try {
