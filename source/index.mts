@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { arch, platform } from "node:os";
 import path from "node:path";
 import url from "node:url";
 import stream from "node:stream/promises";
@@ -73,6 +74,46 @@ const defaultExcludes = [
   "jest.config.js",
 ];
 
+export function getParentComponent(input: string, output: string) {
+  const purlQualifierString = `?arch=${arch()}&platform=${platform()}`;
+  if (!fs.existsSync(path.join(input, "package.json"))) {
+    const parentName = path.basename(output).replace(path.extname(output), "");
+    return {
+      group: "",
+      name: parentName,
+      version: undefined,
+      purl: `pkg:generic/${parentName}${purlQualifierString}`,
+      "bom-ref": `pkg:generic/${parentName}`,
+      type: "application",
+    };
+  }
+  const packageJsonAsString = fs.readFileSync(
+    path.join(input, "package.json"),
+    "utf-8",
+  );
+  const packageJson = JSON.parse(packageJsonAsString);
+  const name = packageJson.name;
+  const version = packageJson.version;
+  const author = packageJson.author;
+  const authorString =
+    author instanceof Object
+      ? `${author.name}${author.email ? ` <${author.email}>` : ""}${
+          author.url ? ` (${author.url})` : ""
+        }`
+      : author;
+  return {
+    group: "",
+    name,
+    version,
+    purl: `pkg:generic/${name.replace(/^@/, "%40")}@${version}${purlQualifierString}`,
+    "bom-ref": `pkg:generic/${name}@${version}`,
+    description: packageJson.description,
+    license: packageJson.license,
+    author: authorString,
+    type: "application",
+  };
+}
+
 /**
  * Get information about the runtime.
  *
@@ -83,15 +124,19 @@ export function getRuntimeInformation() {
     group: undefined,
     name: undefined,
     version: undefined,
-    runtime: undefined,
     purl: undefined,
     bomRef: undefined,
     scope: "required",
+    properties: [
+      {
+        name: "internal:is_executable",
+        value: "true",
+      },
+    ],
   };
   // @ts-ignore
   if (globalThis.Deno?.version?.deno) {
     runtimeInfo.name = "deno";
-    runtimeInfo.runtime = "Deno";
     // @ts-ignore
     runtimeInfo.version = globalThis.Deno.version.deno;
     runtimeInfo.purl = `pkg:generic/${runtimeInfo.name}@${runtimeInfo.version}`;
@@ -99,14 +144,12 @@ export function getRuntimeInformation() {
     // @ts-ignore
   } else if (globalThis.Bun?.version) {
     runtimeInfo.name = "bun";
-    runtimeInfo.runtime = "Bun";
     // @ts-ignore
     runtimeInfo.version = globalThis.Bun.version;
     runtimeInfo.purl = `pkg:generic/${runtimeInfo.name}@${runtimeInfo.version}`;
     runtimeInfo["bom-ref"] = runtimeInfo.purl;
   } else if (globalThis.process?.versions?.node) {
     runtimeInfo.name = "node";
-    runtimeInfo.runtime = "Node.js";
     runtimeInfo.version = globalThis.process.versions.node;
     runtimeInfo.purl = `pkg:generic/${runtimeInfo.name}@${runtimeInfo.version}`;
     runtimeInfo["bom-ref"] = runtimeInfo.purl;
@@ -141,6 +184,12 @@ export function getRuntimeInformation() {
           scope: "excluded",
           purl: `pkg:generic/${name}@${version}`,
           "bom-ref": `pkg:generic/${name}@${version}`,
+          properties: [
+            {
+              name: "internal:is_shared_library",
+              value: "true",
+            },
+          ],
         };
         if (nodeSourceUrl) {
           // @ts-ignore
@@ -173,6 +222,12 @@ export function getRuntimeInformation() {
           scope: "excluded",
           purl: `pkg:generic/${name}#${aso}`,
           "bom-ref": `pkg:generic/${name}`,
+          properties: [
+            {
+              name: "internal:is_shared_library",
+              value: "true",
+            },
+          ],
         };
         osSharedObjects.push(apkg);
       }
@@ -256,14 +311,7 @@ export default async function caxa({
     ref: string;
     dependsOn: string[];
   }
-  const parentName = path.basename(output).replace(path.extname(output), "");
-  const parentComponent = {
-    group: "",
-    name: parentName,
-    version: undefined,
-    purl: `pkg:generic/${parentName}`,
-    "bom-ref": `pkg:generic/${parentName}`,
-  };
+  const parentComponent = getParentComponent(input, output);
   const components: Component[] = [];
   const bomRefLookup = new Map<string, string>();
   if (includeNode) {
