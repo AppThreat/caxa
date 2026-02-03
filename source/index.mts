@@ -139,20 +139,22 @@ export function getRuntimeInformation() {
     runtimeInfo.name = "deno";
     // @ts-ignore
     runtimeInfo.version = globalThis.Deno.version.deno;
-    runtimeInfo.purl = `pkg:generic/${runtimeInfo.name}@${runtimeInfo.version}`;
+    runtimeInfo.purl = `pkg:generic/denoland/${runtimeInfo.name}@${runtimeInfo.version}`;
     runtimeInfo["bom-ref"] = runtimeInfo.purl;
+    runtimeInfo.cpe = `cpe:2.3:a:deno:deno:${runtimeInfo.version}:*:*:*:-:*:*:*`;
     // @ts-ignore
   } else if (globalThis.Bun?.version) {
     runtimeInfo.name = "bun";
     // @ts-ignore
     runtimeInfo.version = globalThis.Bun.version;
-    runtimeInfo.purl = `pkg:generic/${runtimeInfo.name}@${runtimeInfo.version}`;
+    runtimeInfo.purl = `pkg:generic/oven-sh/${runtimeInfo.name}@${runtimeInfo.version}`;
     runtimeInfo["bom-ref"] = runtimeInfo.purl;
   } else if (globalThis.process?.versions?.node) {
     runtimeInfo.name = "node";
     runtimeInfo.version = globalThis.process.versions.node;
-    runtimeInfo.purl = `pkg:generic/${runtimeInfo.name}@${runtimeInfo.version}`;
+    runtimeInfo.purl = `pkg:generic/nodejs/${runtimeInfo.name}@${runtimeInfo.version}`;
     runtimeInfo["bom-ref"] = runtimeInfo.purl;
+    runtimeInfo.cpe = `cpe:2.3:a:nodejs:node.js:${runtimeInfo.version}:*:*:*:-:*:*:*`;
     const report = process.report.getReport();
     // @ts-ignore
     const nodeSourceUrl = report?.header?.release?.sourceUrl;
