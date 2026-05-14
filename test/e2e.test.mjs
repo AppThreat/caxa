@@ -701,6 +701,10 @@ test("caxa cli: variadic --upx-args values are forwarded to the UPX process", as
     },
   );
 
+  assert.ok(
+    fs.existsSync(upxLogPath),
+    "Expected the fake UPX executable to be invoked and write its argument log",
+  );
   const forwardedUpxArgs = JSON.parse(fs.readFileSync(upxLogPath, "utf8"));
   assert.deepEqual(forwardedUpxArgs.slice(0, 2), ["--best", "--lzma"]);
   assert.equal(

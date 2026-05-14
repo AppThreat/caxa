@@ -27,9 +27,52 @@ type PayloadCompression = "gzip" | "zstd";
 const darwinSystemLibraryPrefixes = ["/System/Library/", "/usr/lib/"];
 const linuxSystemLibraryPrefixes = ["/lib", "/lib64", "/usr/lib", "/usr/lib64"];
 
+function resolveUpxCommand(): { command: string; shell?: boolean } {
+  if (process.platform !== "win32") {
+    return { command: "upx" };
+  }
+
+  const pathKey = Object.keys(process.env).find(
+    (key) => key.toLowerCase() === "path",
+  );
+  const pathValue = pathKey ? (process.env[pathKey] ?? "") : "";
+  const pathExtensions = (
+    process.env.PATHEXT?.split(";") ?? [".COM", ".EXE", ".BAT", ".CMD"]
+  )
+    .filter(Boolean)
+    .map((extension) => extension.toLowerCase());
+  const candidateNames = [
+    "upx",
+    ...pathExtensions.map((extension) => `upx${extension}`),
+  ];
+
+  for (const directory of pathValue.split(path.delimiter)) {
+    if (!directory) {
+      continue;
+    }
+
+    for (const candidateName of candidateNames) {
+      const candidatePath = path.join(directory, candidateName);
+      if (!existsSync(candidatePath)) {
+        continue;
+      }
+
+      const extension = path.extname(candidatePath).toLowerCase();
+      return {
+        command: candidatePath,
+        shell: extension === ".cmd" || extension === ".bat",
+      };
+    }
+  }
+
+  return { command: "upx" };
+}
+
 async function runUpx(file: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const upxProcess = spawn("upx", [...args, file], {
+    const { command, shell } = resolveUpxCommand();
+    const upxProcess = spawn(command, [...args, file], {
+      shell,
       stdio: "inherit",
     });
 
