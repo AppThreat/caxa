@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 
+import { randomBytes } from "node:crypto";
+import {
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  readFileSync,
+} from "node:fs";
+import * as fsp from "node:fs/promises";
 import { arch, platform } from "node:os";
 import path from "node:path";
 import url from "node:url";
 import stream from "node:stream/promises";
 import { createGzip, createZstdCompress } from "node:zlib";
-import fs from "fs-extra";
-import { globby } from "globby";
-import cryptoRandomString from "crypto-random-string";
-import bash from "dedent";
 import archiver from "archiver";
 import * as commander from "commander";
 import process from "node:process";
@@ -136,6 +140,146 @@ interface PortableNodeBundle {
   root: string;
 }
 
+function randomToken(length: number): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = randomBytes(length);
+  let token = "";
+
+  for (const byte of bytes) {
+    token += alphabet[byte % alphabet.length];
+  }
+
+  return token;
+}
+
+function stripIndent(
+  strings: TemplateStringsArray,
+  ...values: Array<string | number | undefined>
+): string {
+  const fullText = strings.reduce((result, stringPart, index) => {
+    const value = index < values.length ? String(values[index] ?? "") : "";
+    return result + stringPart + value;
+  }, "");
+  const lines = fullText.replace(/^\n/, "").split("\n");
+  const indents = lines
+    .filter((line) => line.trim().length > 0)
+    .map((line) => line.match(/^\s*/)?.[0].length ?? 0);
+  const minIndent = indents.length > 0 ? Math.min(...indents) : 0;
+
+  return lines
+    .map((line) => line.slice(minIndent))
+    .join("\n")
+    .trimEnd();
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fsp.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureDir(dirPath: string): Promise<void> {
+  await fsp.mkdir(dirPath, { recursive: true });
+}
+
+async function removePath(targetPath: string): Promise<void> {
+  await fsp.rm(targetPath, { recursive: true, force: true });
+}
+
+async function readJsonFile(filePath: string): Promise<any> {
+  return JSON.parse(await fsp.readFile(filePath, "utf8"));
+}
+
+async function writeJsonFile(
+  filePath: string,
+  value: unknown,
+  spaces = 0,
+): Promise<void> {
+  await fsp.writeFile(filePath, JSON.stringify(value, null, spaces), "utf8");
+}
+
+function isExcludedPath(relativePath: string, exclude: string[]): boolean {
+  const normalizedPath = normalizeArchivePath(relativePath);
+  const segments = normalizedPath.split("/");
+  const ancestors: string[] = [];
+
+  for (let index = 1; index < segments.length; index += 1) {
+    ancestors.push(segments.slice(0, index).join("/"));
+  }
+
+  return exclude.some(
+    (pattern) =>
+      path.matchesGlob(normalizedPath, pattern) ||
+      ancestors.some((ancestor) => path.matchesGlob(ancestor, pattern)),
+  );
+}
+
+function shouldPruneDirectory(
+  relativePath: string,
+  exclude: string[],
+): boolean {
+  const normalizedPath = normalizeArchivePath(relativePath);
+
+  return exclude.some(
+    (pattern) =>
+      path.matchesGlob(normalizedPath, pattern) ||
+      path.matchesGlob(`${normalizedPath}/__caxa_probe__`, pattern),
+  );
+}
+
+async function walkFiles(
+  root: string,
+  current: string,
+  exclude: string[],
+  files: string[],
+): Promise<void> {
+  const entries = await fsp.readdir(current, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const absolutePath = path.join(current, entry.name);
+    const relativePath = normalizeArchivePath(
+      path.relative(root, absolutePath),
+    );
+
+    if (entry.isDirectory()) {
+      if (shouldPruneDirectory(relativePath, exclude)) {
+        continue;
+      }
+      await walkFiles(root, absolutePath, exclude, files);
+      continue;
+    }
+
+    if (isExcludedPath(relativePath, exclude)) {
+      continue;
+    }
+
+    if (entry.isFile() || entry.isSymbolicLink()) {
+      files.push(relativePath);
+    }
+  }
+}
+
+async function copyEntry(
+  sourcePath: string,
+  destinationPath: string,
+): Promise<void> {
+  const stats = await fsp.lstat(sourcePath);
+  await ensureDir(path.dirname(destinationPath));
+
+  if (stats.isSymbolicLink()) {
+    const linkTarget = await fsp.readlink(sourcePath);
+    await removePath(destinationPath);
+    await fsp.symlink(linkTarget, destinationPath);
+    return;
+  }
+
+  await fsp.copyFile(sourcePath, destinationPath);
+  await fsp.chmod(destinationPath, stats.mode);
+}
+
 function normalizeUpxArgs(args: string[]): string[] {
   return args
     .flatMap((arg) => arg.split(/\s+/))
@@ -145,7 +289,7 @@ function normalizeUpxArgs(args: string[]): string[] {
 function createIdentifier(output: string): string {
   return path.join(
     path.basename(path.basename(path.basename(output, ".exe"), ".app"), ".sh"),
-    cryptoRandomString({ length: 10, type: "alphanumeric" }).toLowerCase(),
+    randomToken(10),
   );
 }
 
@@ -159,7 +303,7 @@ function createPayloadTempPath(
 ): string {
   return path.join(
     outputDirectory,
-    `.caxa-payload-${cryptoRandomString({ length: 12, type: "alphanumeric" }).toLowerCase()}.tar.${compression === "zstd" ? "zst" : "gz"}`,
+    `.caxa-payload-${randomToken(12)}.tar.${compression === "zstd" ? "zst" : "gz"}`,
   );
 }
 
@@ -248,11 +392,11 @@ async function resolveExistingPath(
     return undefined;
   }
 
-  if (!(await fs.pathExists(filePath))) {
+  if (!(await pathExists(filePath))) {
     return undefined;
   }
 
-  return fs.realpath(filePath).catch(() => filePath);
+  return fsp.realpath(filePath).catch(() => filePath);
 }
 
 async function resolveDarwinDependencyReference(
@@ -345,7 +489,7 @@ async function resolveDarwinDependencyReference(
 async function collectDarwinRuntimeLibraries(
   executablePath: string,
 ): Promise<string[]> {
-  const pending = [await fs.realpath(executablePath)];
+  const pending = [await fsp.realpath(executablePath)];
   const scanned = new Set<string>();
   const collected = new Map<string, string>();
 
@@ -392,7 +536,7 @@ async function collectDarwinRuntimeLibraries(
 async function collectLinuxRuntimeLibraries(
   executablePath: string,
 ): Promise<string[]> {
-  const pending = [await fs.realpath(executablePath)];
+  const pending = [await fsp.realpath(executablePath)];
   const scanned = new Set<string>();
   const collected = new Map<string, string>();
 
@@ -456,24 +600,21 @@ async function preparePortableNodeBundle({
   upx: boolean;
   upxArgs: string[];
 }): Promise<PortableNodeBundle> {
-  const nodePath = await fs.realpath(process.execPath);
-  const bundleRoot = path.join(
-    stagingParent,
-    `.caxa-node-${cryptoRandomString({ length: 12, type: "alphanumeric" }).toLowerCase()}`,
-  );
+  const nodePath = await fsp.realpath(process.execPath);
+  const bundleRoot = path.join(stagingParent, `.caxa-node-${randomToken(12)}`);
   const binDir = path.join(bundleRoot, "node_modules", ".bin");
-  await fs.ensureDir(binDir);
+  await ensureDir(binDir);
 
   if (process.platform === "win32") {
     const nodeDestination = path.join(binDir, path.basename(nodePath));
-    await fs.copyFile(nodePath, nodeDestination);
-    await fs.chmod(nodeDestination, 0o755);
+    await fsp.copyFile(nodePath, nodeDestination);
+    await fsp.chmod(nodeDestination, 0o755);
 
-    for (const entry of await fs.readdir(path.dirname(nodePath))) {
+    for (const entry of await fsp.readdir(path.dirname(nodePath))) {
       if (!entry.toLowerCase().endsWith(".dll")) {
         continue;
       }
-      await fs.copyFile(
+      await fsp.copyFile(
         path.join(path.dirname(nodePath), entry),
         path.join(binDir, entry),
       );
@@ -489,9 +630,9 @@ async function preparePortableNodeBundle({
   const wrapperName = path.basename(nodePath);
   const nodeRealDestination = path.join(binDir, `${wrapperName}-real`);
   const nodeLibDir = path.join(binDir, `${wrapperName}-libs`);
-  await fs.ensureDir(nodeLibDir);
-  await fs.copyFile(nodePath, nodeRealDestination);
-  await fs.chmod(nodeRealDestination, 0o755);
+  await ensureDir(nodeLibDir);
+  await fsp.copyFile(nodePath, nodeRealDestination);
+  await fsp.chmod(nodeRealDestination, 0o755);
 
   if (upx) {
     await runUpx(nodeRealDestination, normalizeUpxArgs(upxArgs));
@@ -503,7 +644,7 @@ async function preparePortableNodeBundle({
       : await collectLinuxRuntimeLibraries(nodePath);
 
   for (const libraryPath of runtimeLibraries) {
-    await fs.copyFile(
+    await fsp.copyFile(
       libraryPath,
       path.join(nodeLibDir, path.basename(libraryPath)),
     );
@@ -511,9 +652,9 @@ async function preparePortableNodeBundle({
 
   const envVariableName =
     process.platform === "darwin" ? "DYLD_LIBRARY_PATH" : "LD_LIBRARY_PATH";
-  await fs.writeFile(
+  await fsp.writeFile(
     path.join(binDir, wrapperName),
-    bash`
+    stripIndent`
       #!/usr/bin/env sh
       export CAXA_NODE_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
       export ${envVariableName}="$CAXA_NODE_DIR/${wrapperName}-libs${`$`}{${envVariableName}:+:${`$`}{${envVariableName}}}"
@@ -529,18 +670,13 @@ async function appendDirectoryContentsToArchive(
   archive: archiver.Archiver,
   root: string,
 ): Promise<void> {
-  const files = await globby(["**/*"], {
-    cwd: root,
-    onlyFiles: true,
-    dot: true,
-    followSymbolicLinks: false,
-  });
+  const files = await collectFiles(root, []);
 
   for (const file of files) {
     const absolutePath = path.join(root, file);
     archive.file(absolutePath, {
       name: normalizeArchivePath(file),
-      stats: await fs.stat(absolutePath),
+      stats: await fsp.stat(absolutePath),
     });
   }
 }
@@ -549,44 +685,32 @@ async function copyDirectoryContents(
   source: string,
   destination: string,
 ): Promise<void> {
-  const files = await globby(["**/*"], {
-    cwd: source,
-    onlyFiles: true,
-    dot: true,
-    followSymbolicLinks: false,
-  });
+  const files = await collectFiles(source, []);
 
   for (const file of files) {
     const sourcePath = path.join(source, file);
     const destinationPath = path.join(destination, file);
-    await fs.ensureDir(path.dirname(destinationPath));
-    await fs.copyFile(sourcePath, destinationPath);
-    const stats = await fs.stat(sourcePath);
-    await fs.chmod(destinationPath, stats.mode);
+    await copyEntry(sourcePath, destinationPath);
   }
 }
 
 async function validateOutput(output: string, force: boolean): Promise<void> {
-  if ((await fs.pathExists(output)) && !force)
+  if ((await pathExists(output)) && !force)
     throw new Error(`Output already exists: ‘${output}’.`);
   if (process.platform === "win32" && !output.endsWith(".exe"))
     throw new Error("Windows executable must end in ‘.exe’.");
 
-  await fs.ensureDir(path.dirname(output));
-  await fs.remove(output);
+  await ensureDir(path.dirname(output));
+  await removePath(output);
 }
 
 async function collectFiles(
   input: string,
   exclude: string[],
 ): Promise<string[]> {
-  return globby(["**/*"], {
-    cwd: input,
-    onlyFiles: true,
-    dot: true,
-    ignore: exclude,
-    followSymbolicLinks: false,
-  });
+  const files: string[] = [];
+  await walkFiles(input, input, exclude, files);
+  return files.sort((left, right) => left.localeCompare(right));
 }
 
 async function collectMetadata(
@@ -614,7 +738,7 @@ async function collectMetadata(
     }
 
     try {
-      const pkg = await fs.readJson(path.join(input, file));
+      const pkg = await readJsonFile(path.join(input, file));
       if (!pkg.name || !pkg.version) {
         continue;
       }
@@ -702,14 +826,14 @@ async function writeMetadataFile({
   components: Component[];
   dependencies: DependencyGraphEntry[];
 }): Promise<void> {
-  await fs.writeJson(
+  await writeJsonFile(
     path.join(path.dirname(output), metadataFile),
     {
       parentComponent: getParentComponent(input, output),
       components,
       dependencies,
     },
-    { spaces: 0 },
+    0,
   );
 }
 
@@ -731,7 +855,7 @@ async function createPayloadArchive({
   upxArgs: string[];
 }): Promise<number> {
   const archive = archiver("tar");
-  const outputStream = fs.createWriteStream(destination);
+  const outputStream = createWriteStream(destination);
   const compressor =
     compression === "zstd" ? createZstdCompress() : createGzip();
   const completion = stream.pipeline(archive, compressor, outputStream);
@@ -747,9 +871,9 @@ async function createPayloadArchive({
   for (const file of files) {
     const absPath = path.join(input, file);
     const name = normalizeArchivePath(file);
-    const stats = await fs.lstat(absPath);
+    const stats = await fsp.lstat(absPath);
     if (stats.isSymbolicLink()) {
-      const linkTarget = await fs.readlink(absPath);
+      const linkTarget = await fsp.readlink(absPath);
       archive.symlink(name, linkTarget);
     } else {
       archive.file(absPath, { name, stats });
@@ -770,16 +894,16 @@ async function createPayloadArchive({
   await completion;
 
   for (const tempPath of tempPathsCleanup) {
-    await fs.remove(tempPath);
+    await removePath(tempPath);
   }
 
-  return (await fs.stat(destination)).size;
+  return (await fsp.stat(destination)).size;
 }
 
 async function appendFile(source: string, destination: string): Promise<void> {
   await stream.pipeline(
-    fs.createReadStream(source),
-    fs.createWriteStream(destination, { flags: "a" }),
+    createReadStream(source),
+    createWriteStream(destination, { flags: "a" }),
   );
 }
 
@@ -859,20 +983,20 @@ async function buildNativeOutput({
     dependencies,
   });
 
-  if (!(await fs.pathExists(stub))) {
+  if (!(await pathExists(stub))) {
     throw new Error(
       `Stub not found (your operating system / architecture may be unsupported): ‘${stub}’`,
     );
   }
 
-  await fs.copyFile(stub, output);
-  await fs.chmod(output, 0o755);
+  await fsp.copyFile(stub, output);
+  await fsp.chmod(output, 0o755);
   if (upx) {
     await runUpx(output, normalizeUpxArgs(upxArgs));
   }
 
-  await fs.appendFile(output, archiveSeparator);
-  const payloadOffset = (await fs.stat(output)).size;
+  await fsp.appendFile(output, archiveSeparator);
+  const payloadOffset = (await fsp.stat(output)).size;
   await appendFile(payloadPath, output);
 
   const footer = createFooterBuffer({
@@ -881,8 +1005,8 @@ async function buildNativeOutput({
     uncompressionMessage,
     compression,
   });
-  await fs.appendFile(output, footer);
-  await fs.appendFile(
+  await fsp.appendFile(output, footer);
+  await fsp.appendFile(
     output,
     createTrailerBuffer({
       payloadOffset,
@@ -894,7 +1018,7 @@ async function buildNativeOutput({
 
 export function getParentComponent(input: string, output: string) {
   const purlQualifierString = `?arch=${arch()}&platform=${platform()}`;
-  if (!fs.existsSync(path.join(input, "package.json"))) {
+  if (!existsSync(path.join(input, "package.json"))) {
     const parentName = path.basename(output).replace(path.extname(output), "");
     return {
       group: "",
@@ -905,7 +1029,7 @@ export function getParentComponent(input: string, output: string) {
       type: "application",
     };
   }
-  const packageJsonAsString = fs.readFileSync(
+  const packageJsonAsString = readFileSync(
     path.join(input, "package.json"),
     "utf-8",
   );
@@ -1076,7 +1200,7 @@ export async function caxaBatch({
 }: CommonBuildOptions & {
   targets: TargetOptions[];
 }): Promise<void> {
-  if (!(await fs.pathExists(input)) || !(await fs.lstat(input)).isDirectory()) {
+  if (!(await pathExists(input)) || !(await fsp.lstat(input)).isDirectory()) {
     throw new Error(`Input isn’t a directory: ‘${input}’.`);
   }
   if (targets.length === 0) {
@@ -1105,7 +1229,7 @@ export async function caxaBatch({
   );
   let payloadSize = 0;
   try {
-    await fs.ensureDir(path.dirname(payloadPath));
+    await ensureDir(path.dirname(payloadPath));
     payloadSize = await createPayloadArchive({
       input,
       files,
@@ -1136,7 +1260,7 @@ export async function caxaBatch({
       });
     }
   } finally {
-    await fs.remove(payloadPath);
+    await removePath(payloadPath);
   }
 }
 
@@ -1166,7 +1290,7 @@ export default async function caxa({
   command: string[];
   force?: boolean;
   exclude?: string[];
-  filter?: fs.CopyFilterSync | fs.CopyFilterAsync;
+  filter?: unknown;
   includeNode?: boolean;
   stub?: string;
   identifier?: string;
@@ -1176,7 +1300,7 @@ export default async function caxa({
   upx?: boolean;
   upxArgs?: string[];
 }): Promise<void> {
-  if (!(await fs.pathExists(input)) || !(await fs.lstat(input)).isDirectory())
+  if (!(await pathExists(input)) || !(await fsp.lstat(input)).isDirectory())
     throw new Error(`Input isn’t a directory: ‘${input}’.`);
 
   if (!exclude) exclude = defaultExcludes;
@@ -1204,23 +1328,23 @@ export default async function caxa({
         "macOS Application Bundles (.app) are supported in macOS only.",
       );
 
-    await fs.ensureDir(path.join(output, "Contents", "MacOS"));
-    await fs.ensureDir(path.join(output, "Contents", "Resources"));
+    await ensureDir(path.join(output, "Contents", "MacOS"));
+    await ensureDir(path.join(output, "Contents", "Resources"));
 
     const name = path.basename(output, ".app");
 
-    await fs.writeFile(
+    await fsp.writeFile(
       path.join(output, "Contents", "MacOS", name),
-      bash`
+      stripIndent`
         #!/usr/bin/env sh
         open "$(dirname "$0")/../Resources/${name}"
       ` + "\n",
       { mode: 0o755 },
     );
 
-    await fs.writeFile(
+    await fsp.writeFile(
       path.join(output, "Contents", "Resources", name),
-      bash`
+      stripIndent`
         #!/usr/bin/env sh
         ${command
           .map(
@@ -1233,12 +1357,12 @@ export default async function caxa({
     );
 
     const appDest = path.join(output, "Contents", "Resources", "application");
-    await fs.ensureDir(appDest);
+    await ensureDir(appDest);
 
     for (const file of files) {
       const src = path.join(input, file);
       const dest = path.join(appDest, file);
-      await fs.copy(src, dest);
+      await copyEntry(src, dest);
     }
 
     if (includeNode) {
@@ -1250,7 +1374,7 @@ export default async function caxa({
       try {
         await copyDirectoryContents(bundle.root, appDest);
       } finally {
-        await fs.remove(bundle.root);
+        await removePath(bundle.root);
       }
     }
   } else if (output.endsWith(".sh")) {
@@ -1267,7 +1391,7 @@ export default async function caxa({
       throw new Error("The Shell Stub (.sh) isn’t supported in Windows.");
 
     let shellStub =
-      bash`
+      stripIndent`
         #!/usr/bin/env sh
         export CAXA_TMP="$(dirname $(mktemp))/caxa"
         export CAXA_ID="${identifier}"
@@ -1279,7 +1403,7 @@ export default async function caxa({
              break
           fi
           
-          ${uncompressionMessage ? bash`echo "${uncompressionMessage}" >&2` : ""}
+          ${uncompressionMessage ? `echo "${uncompressionMessage}" >&2` : ""}
           mkdir -p "$CAXA_LOCK" "$CAXA_APP"
           tail -n+{{lines}} "$0" | tar -xz -C "$CAXA_APP"
           rmdir "$CAXA_LOCK"
@@ -1294,7 +1418,7 @@ export default async function caxa({
       "{{lines}}",
       String(shellStub.split("\n").length),
     );
-    await fs.writeFile(output, shellStub, { mode: 0o755 });
+    await fsp.writeFile(output, shellStub, { mode: 0o755 });
     const payloadPath = createPayloadTempPath(
       path.dirname(output),
       compression,
@@ -1311,7 +1435,7 @@ export default async function caxa({
       });
       await appendFile(payloadPath, output);
     } finally {
-      await fs.remove(payloadPath);
+      await removePath(payloadPath);
     }
   } else {
     const payloadPath = createPayloadTempPath(
@@ -1347,12 +1471,14 @@ export default async function caxa({
         payloadSize,
       });
     } finally {
-      await fs.remove(payloadPath);
+      await removePath(payloadPath);
     }
   }
 }
 
-if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
+if (
+  url.fileURLToPath(import.meta.url) === (await fsp.realpath(process.argv[1]))
+)
   await commander.program
     .name("caxa")
     .description("Package Node.js applications into executable binaries")
@@ -1403,7 +1529,7 @@ if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
     .argument("[command...]", "Command to run.")
     .version(
       JSON.parse(
-        await fs.readFile(new URL("../package.json", import.meta.url), "utf8"),
+        await fsp.readFile(new URL("../package.json", import.meta.url), "utf8"),
       ).version,
     )
     .action(async (command, opts) => {
@@ -1415,7 +1541,7 @@ if (url.fileURLToPath(import.meta.url) === (await fs.realpath(process.argv[1])))
             );
           }
 
-          const targets = await fs.readJson(opts.targetsFile);
+          const targets = await readJsonFile(opts.targetsFile);
           if (!Array.isArray(targets)) {
             throw new Error("Targets file must contain a JSON array.");
           }
