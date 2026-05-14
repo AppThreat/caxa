@@ -408,19 +408,56 @@ function parseCompressionOption(
 }
 
 function normalizeCliOptionArgs(args: string[]): string[] {
+  const cliOptionTokens = new Set([
+    "--input",
+    "-i",
+    "--output",
+    "-o",
+    "--targets-file",
+    "--metadata-file",
+    "--no-force",
+    "-F",
+    "--exclude",
+    "-e",
+    "--no-include-node",
+    "-N",
+    "--stub",
+    "-s",
+    "--identifier",
+    "--no-remove-build-directory",
+    "-B",
+    "--uncompression-message",
+    "-m",
+    "--upx",
+    "--upx-args",
+    "--compression",
+    "-c",
+    "--version",
+    "-V",
+    "--help",
+    "-h",
+  ]);
   const normalized: string[] = [];
 
   for (let index = 0; index < args.length; index += 1) {
     const currentArg = args[index];
-    if (currentArg !== "--exclude" && currentArg !== "-e") {
+    if (
+      currentArg !== "--exclude" &&
+      currentArg !== "-e" &&
+      currentArg !== "--upx-args"
+    ) {
       normalized.push(currentArg);
       continue;
     }
 
+    const acceptsOptionLikeValues = currentArg === "--upx-args";
     const values: string[] = [];
     for (let cursor = index + 1; cursor < args.length; cursor += 1) {
       const candidate = args[cursor];
-      if (candidate.startsWith("-")) {
+      if (
+        (!acceptsOptionLikeValues && candidate.startsWith("-")) ||
+        (acceptsOptionLikeValues && cliOptionTokens.has(candidate))
+      ) {
         break;
       }
       values.push(candidate);
@@ -433,6 +470,10 @@ function normalizeCliOptionArgs(args: string[]): string[] {
     }
 
     for (const value of values) {
+      if (currentArg === "--upx-args") {
+        normalized.push(`--upx-args=${value}`);
+        continue;
+      }
       normalized.push(currentArg, value);
     }
   }
@@ -1428,8 +1469,10 @@ export async function caxaBatch({
   compression = "zstd",
   upx = false,
   upxArgs = [],
+  force = true,
 }: CommonBuildOptions & {
   targets: TargetOptions[];
+  force?: boolean;
 }): Promise<void> {
   if (!(await pathExists(input)) || !(await fsp.lstat(input)).isDirectory()) {
     throw new Error(`Input isn’t a directory: ‘${input}’.`);
@@ -1477,7 +1520,7 @@ export async function caxaBatch({
     for (const target of targets) {
       await buildNativeOutput({
         output: target.output,
-        force: target.force ?? true,
+        force: target.force ?? force,
         metadataFile: target.metadataFile ?? "binary-metadata.json",
         identifier: target.identifier ?? contentAddressedIdentifier,
         command: target.command,
@@ -1765,6 +1808,7 @@ if (
         compression: parsedArguments.options.compression,
         upx: parsedArguments.options.upx,
         upxArgs: parsedArguments.options.upxArgs,
+        force: parsedArguments.options.force,
         targets,
       });
       process.exit(0);

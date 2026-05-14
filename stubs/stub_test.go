@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,7 +60,7 @@ func createMockPayload(files map[string][]byte, compression string) ([]byte, err
 			return nil, err
 		}
 	default:
-		return nil, nil
+		return nil, fmt.Errorf("unsupported compression: %s", compression)
 	}
 	if err := writer.Close(); err != nil {
 		return nil, err
@@ -177,6 +178,18 @@ func TestInspectBinary_WithTrailer(t *testing.T) {
 	}
 	if string(content) != "console.log('ok')" {
 		t.Fatalf("Unexpected extracted content: %s", string(content))
+	}
+}
+
+func TestCreateMockPayload_UnsupportedCompression(t *testing.T) {
+	_, err := createMockPayload(map[string][]byte{
+		"index.js": []byte("console.log('ok')"),
+	}, "brotli")
+	if err == nil {
+		t.Fatal("expected unsupported compression to return an error")
+	}
+	if !strings.Contains(err.Error(), "unsupported compression: brotli") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

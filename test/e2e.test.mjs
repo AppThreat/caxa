@@ -534,3 +534,176 @@ test("caxa batch mode: multiple native outputs share one payload build", async (
     }
   }
 });
+
+test("caxa batch mode: --no-force is honored for targets without an explicit force override", async () => {
+  const fixtureDir = path.resolve("test/e2e-fixture-batch-no-force");
+  const outputBin = path.resolve(
+    "test-output-batch-no-force" + (process.platform === "win32" ? ".exe" : ""),
+  );
+  const targetsFile = path.resolve("test/e2e-targets-no-force.json");
+
+  for (const candidate of [fixtureDir, outputBin, targetsFile]) {
+    if (fs.existsSync(candidate)) {
+      fs.rmSync(candidate, { recursive: true, force: true });
+    }
+  }
+
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(fixtureDir, "package.json"),
+    JSON.stringify({ name: "batch-no-force-app", version: "1.0.0" }),
+  );
+  fs.writeFileSync(
+    path.join(fixtureDir, "index.js"),
+    "console.log('BATCH_NO_FORCE_OK');",
+  );
+  fs.writeFileSync(outputBin, "existing output should not be overwritten");
+  fs.writeFileSync(
+    targetsFile,
+    JSON.stringify([
+      {
+        output: outputBin,
+        command: [process.execPath, "{{caxa}}/index.js"],
+      },
+    ]),
+  );
+
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [
+          "build/index.mjs",
+          "-i",
+          fixtureDir,
+          "--no-include-node",
+          "--no-force",
+          "--targets-file",
+          targetsFile,
+        ],
+        { encoding: "utf8" },
+      ),
+    (error) => {
+      assert.equal(error.status, 1);
+      assert.match(`${error.stdout}\n${error.stderr}`, /Output already exists/);
+      return true;
+    },
+  );
+
+  assert.equal(
+    fs.readFileSync(outputBin, "utf8"),
+    "existing output should not be overwritten",
+  );
+
+  for (const candidate of [fixtureDir, outputBin, targetsFile]) {
+    if (fs.existsSync(candidate)) {
+      fs.rmSync(candidate, { recursive: true, force: true });
+    }
+  }
+});
+
+test("caxa cli: variadic --upx-args values are forwarded to the UPX process", async () => {
+  const fixtureDir = path.resolve("test/e2e-fixture-upx-args");
+  const outputBin = path.resolve(
+    "test-output-upx-args" + (process.platform === "win32" ? ".exe" : ""),
+  );
+  const fakeBinDir = path.resolve("test/e2e-fake-upx-bin");
+  const fakeUpxHandler = path.join(fakeBinDir, "upx-handler.js");
+  const fakeUpxExecutable = path.join(
+    fakeBinDir,
+    process.platform === "win32" ? "upx.cmd" : "upx",
+  );
+  const upxLogPath = path.resolve("test/e2e-fake-upx-log.json");
+
+  for (const candidate of [
+    fixtureDir,
+    outputBin,
+    fakeBinDir,
+    upxLogPath,
+    path.resolve("binary-metadata.json"),
+  ]) {
+    if (fs.existsSync(candidate)) {
+      fs.rmSync(candidate, { recursive: true, force: true });
+    }
+  }
+
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  fs.mkdirSync(fakeBinDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(fixtureDir, "package.json"),
+    JSON.stringify({ name: "upx-args-app", version: "1.0.0" }),
+  );
+  fs.writeFileSync(
+    path.join(fixtureDir, "index.js"),
+    "console.log('UPX_ARGS_OK');",
+  );
+  fs.writeFileSync(
+    fakeUpxHandler,
+    [
+      "const fs = require('node:fs');",
+      "fs.writeFileSync(process.env.UPX_LOG, JSON.stringify(process.argv.slice(2)));",
+    ].join("\n"),
+  );
+  fs.writeFileSync(
+    fakeUpxExecutable,
+    process.platform === "win32"
+      ? [
+          "@echo off",
+          `\"${process.execPath.replace(/\//g, "\\")}\" \"${fakeUpxHandler.replace(/\//g, "\\")}\" %*`,
+        ].join("\r\n")
+      : [
+          "#!/bin/sh",
+          `exec \"${process.execPath}\" \"${fakeUpxHandler}\" \"$@\"`,
+        ].join("\n"),
+  );
+  if (process.platform !== "win32") {
+    fs.chmodSync(fakeUpxExecutable, 0o755);
+  }
+
+  execFileSync(
+    process.execPath,
+    [
+      "build/index.mjs",
+      "-i",
+      fixtureDir,
+      "-o",
+      outputBin,
+      "--no-include-node",
+      "--upx",
+      "--upx-args",
+      "--best",
+      "--lzma",
+      "--",
+      process.execPath,
+      "{{caxa}}/index.js",
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        UPX_LOG: upxLogPath,
+      },
+    },
+  );
+
+  const forwardedUpxArgs = JSON.parse(fs.readFileSync(upxLogPath, "utf8"));
+  assert.deepEqual(forwardedUpxArgs.slice(0, 2), ["--best", "--lzma"]);
+  assert.equal(
+    forwardedUpxArgs.at(-1).replace(/\\/g, "/"),
+    outputBin.replace(/\\/g, "/"),
+  );
+  assert.match(execFileSync(outputBin, [], { encoding: "utf8" }), /UPX_ARGS_OK/);
+
+  for (const candidate of [
+    fixtureDir,
+    outputBin,
+    fakeBinDir,
+    upxLogPath,
+    path.resolve("binary-metadata.json"),
+  ]) {
+    if (fs.existsSync(candidate)) {
+      fs.rmSync(candidate, { recursive: true, force: true });
+    }
+  }
+});
