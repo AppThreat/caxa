@@ -25,23 +25,23 @@ caxa operates in four primary modes:
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │                         User Environment                             │
-│  ┌───────────┐   ┌──────────────┐   ┌────────────────────────────┐  │
-│  │ CLI / API │   │ Build Inputs │   │ Packaged Binary Execution │  │
-│  └─────┬─────┘   └──────┬───────┘   └──────────────┬─────────────┘  │
-│        │                │                          │                │
-│  ══════╪════════════════╪══════════════════════════╪══════          │
-│  Trust boundary 1: caxa code ←→ input project tree / metadata       │
-│        │                                          │                │
-│  ┌─────▼──────────────────────────────┐  ┌────────▼───────────────┐ │
-│  │ TypeScript builder + archive flow  │  │ Native / shell stub    │ │
-│  └─────┬──────────────────────────────┘  └────────┬───────────────┘ │
-│        │                                          │                │
-│  ══════╪══════════════════════════════════════════╪══════          │
-│  Trust boundary 2: packaged payload ←→ host filesystem/cache        │
-│        │                                          │                │
-│  ┌─────▼──────────────────────────────────────────▼──────────────┐ │
-│  │          Extracted application tree and bundled runtime       │ │
-│  └───────────────────────────────────────────────────────────────┘ │
+│  ┌───────────┐   ┌──────────────┐   ┌────────────────────────────┐   │
+│  │ CLI / API │   │ Build Inputs │   │ Packaged Binary Execution  │   │
+│  └─────┬─────┘   └──────┬───────┘   └──────────────┬─────────────┘   │
+│        │                │                          │                 │
+│  ══════╪════════════════╪══════════════════════════╪══════           │
+│  Trust boundary 1: caxa code ←→ input project tree / metadata        │
+│        │                                          │                  │
+│  ┌─────▼──────────────────────────────┐  ┌────────▼───────────────┐  │
+│  │ TypeScript builder + archive flow  │  │ Native / shell stub    │  │
+│  └─────┬──────────────────────────────┘  └────────┬───────────────┘  │
+│        │                                          │                  │
+│  ══════╪══════════════════════════════════════════╪══════            │
+│  Trust boundary 2: packaged payload ←→ host filesystem/cache         │
+│        │                                          │                  │
+│  ┌─────▼──────────────────────────────────────────▼──────────────┐   │
+│  │          Extracted application tree and bundled runtime       │   │
+│  └───────────────────────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────────────┘
 
 Trust boundary 3: caxa release process ←→ published npm package / artifacts
@@ -50,13 +50,13 @@ Trust boundary 4: caxa process ←→ external tools (`go`, `upx`) and platform 
 
 ## Threat Actors
 
-| Actor                            | Capability                                                                    | Motivation                                                              |
-| -------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| **Malicious project author**     | Controls the input directory being packaged                                   | Ship a binary that leaks secrets, breaks extraction safety, or poisons caches |
-| **Environment manipulator**      | Controls env vars or temp/cache locations during build or runtime             | Influence tool behavior, redirect cache use, or alter runtime lookup    |
-| **Compromised dependency/tool**  | Compromises `archiver`, Node.js, Go, UPX, or platform loader behavior         | Execute unintended code during packaging or extraction                  |
-| **Compromised release pipeline** | Modifies published npm artifacts or prebuilt stubs                            | Distribute tampered packages or binaries                               |
-| **Local attacker on shared host**| Can inspect or race temp/cache directories                                    | Read extracted content or interfere with cache reuse                    |
+| Actor                             | Capability                                                            | Motivation                                                                    |
+| --------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| **Malicious project author**      | Controls the input directory being packaged                           | Ship a binary that leaks secrets, breaks extraction safety, or poisons caches |
+| **Environment manipulator**       | Controls env vars or temp/cache locations during build or runtime     | Influence tool behavior, redirect cache use, or alter runtime lookup          |
+| **Compromised dependency/tool**   | Compromises `archiver`, Node.js, Go, UPX, or platform loader behavior | Execute unintended code during packaging or extraction                        |
+| **Compromised release pipeline**  | Modifies published npm artifacts or prebuilt stubs                    | Distribute tampered packages or binaries                                      |
+| **Local attacker on shared host** | Can inspect or race temp/cache directories                            | Read extracted content or interfere with cache reuse                          |
 
 ## Threats and Mitigations by Component
 
@@ -190,14 +190,14 @@ Trust boundary 4: caxa process ←→ external tools (`go`, `upx`) and platform 
 
 ## Security Controls Summary
 
-| Control Area                 | Current Controls                                                                 |
-| --------------------------- | --------------------------------------------------------------------------------- |
-| Extraction safety           | Tar path validation, symlink-aware copy logic, lock directories                  |
-| Build process safety        | Array-based subprocess invocation, minimized shell usage                         |
-| Runtime portability         | Explicit runtime dependency discovery and packaged library wrappers              |
-| Cache reuse integrity       | Payload-derived identifiers for identical builds                                 |
-| Artifact hygiene            | Conservative default excludes for docs, tests, sourcemaps, declarations, metadata |
-| Dependency minimization     | Single runtime npm dependency (`archiver`)                                       |
+| Control Area            | Current Controls                                                                  |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| Extraction safety       | Tar path validation, symlink-aware copy logic, lock directories                   |
+| Build process safety    | Array-based subprocess invocation, minimized shell usage                          |
+| Runtime portability     | Explicit runtime dependency discovery and packaged library wrappers               |
+| Cache reuse integrity   | Payload-derived identifiers for identical builds                                  |
+| Artifact hygiene        | Conservative default excludes for docs, tests, sourcemaps, declarations, metadata |
+| Dependency minimization | Single runtime npm dependency (`archiver`)                                        |
 
 ## Residual Risks and Design Tradeoffs
 
