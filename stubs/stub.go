@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,12 +22,14 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zstd"
 )
 
 type Config struct {
 	Identifier           string   `json:"identifier"`
 	Command              []string `json:"command"`
 	UncompressionMessage string   `json:"uncompressionMessage"`
+	Compression          string   `json:"compression"`
 }
 
 type fileJob struct {
@@ -35,7 +38,17 @@ type fileJob struct {
 	mode int64
 }
 
+type binaryLayout struct {
+	config        *Config
+	payloadOffset int64
+	payloadSize   int64
+	payload       []byte
+}
+
 const maxBufferSize = 1 * 1024 * 1024
+const archiveSeparator = "\nCAXACAXACAXA\n"
+const trailerMagic = "CAXAIDX1"
+const trailerSize = 32
 
 func main() {
 	exePath, err := os.Executable()
@@ -43,22 +56,17 @@ func main() {
 		log.Fatalf("caxa: failed to find executable: %v", err)
 	}
 
-	data, err := os.ReadFile(exePath)
-	if err != nil {
-		log.Fatalf("caxa: failed to read executable: %v", err)
-	}
-
-	config, payload, err := parseBinary(data)
+	layout, err := inspectBinary(exePath)
 	if err != nil {
 		log.Fatalf("caxa: binary corrupted: %v", err)
 	}
 
-	appDir, err := prepareApplication(config, payload)
+	appDir, err := prepareApplication(exePath, layout)
 	if err != nil {
 		log.Fatalf("caxa: failed to prepare application: %v", err)
 	}
 
-	if err := run(config, appDir); err != nil {
+	if err := run(layout.config, appDir); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			os.Exit(exitErr.ExitCode())
@@ -79,7 +87,7 @@ func parseBinary(data []byte) (*Config, []byte, error) {
 		return nil, nil, fmt.Errorf("invalid footer json: %w", err)
 	}
 
-	archiveSep := []byte("\nCAXACAXACAXA\n")
+	archiveSep := []byte(archiveSeparator)
 	archiveIdx := bytes.Index(data, archiveSep)
 	if archiveIdx == -1 {
 		return nil, nil, errors.New("archive separator not found")
@@ -89,14 +97,84 @@ func parseBinary(data []byte) (*Config, []byte, error) {
 	return &config, payload, nil
 }
 
-func prepareApplication(config *Config, payload []byte) (string, error) {
+func inspectBinary(exePath string) (*binaryLayout, error) {
+	file, err := os.Open(exePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	if info.Size() >= trailerSize {
+		trailer := make([]byte, trailerSize)
+		if _, err := file.ReadAt(trailer, info.Size()-trailerSize); err == nil {
+			if string(trailer[:8]) == trailerMagic {
+				payloadOffset := int64(binary.LittleEndian.Uint64(trailer[8:16]))
+				payloadSize := int64(binary.LittleEndian.Uint64(trailer[16:24]))
+				footerSize := int64(binary.LittleEndian.Uint64(trailer[24:32]))
+				footerOffset := info.Size() - trailerSize - footerSize
+
+				if payloadOffset < 0 || payloadSize < 0 || footerSize < 0 || footerOffset < 0 {
+					return nil, errors.New("invalid trailer offsets")
+				}
+				if payloadOffset+payloadSize > footerOffset {
+					return nil, errors.New("payload overlaps footer")
+				}
+
+				footer := make([]byte, footerSize)
+				if _, err := file.ReadAt(footer, footerOffset); err != nil {
+					return nil, fmt.Errorf("failed to read footer: %w", err)
+				}
+
+				var config Config
+				if err := json.Unmarshal(footer, &config); err != nil {
+					return nil, fmt.Errorf("invalid footer json: %w", err)
+				}
+
+				return &binaryLayout{
+					config:        &config,
+					payloadOffset: payloadOffset,
+					payloadSize:   payloadSize,
+				}, nil
+			}
+		}
+	}
+
+	data, err := os.ReadFile(exePath)
+	if err != nil {
+		return nil, err
+	}
+
+	config, payload, err := parseBinary(data)
+	if err != nil {
+		return nil, err
+	}
+
+	archiveIdx := bytes.Index(data, []byte(archiveSeparator))
+	if archiveIdx == -1 {
+		return nil, errors.New("archive separator not found")
+	}
+
+	return &binaryLayout{
+		config:        config,
+		payloadOffset: int64(archiveIdx + len(archiveSeparator)),
+		payloadSize:   int64(len(payload)),
+		payload:       payload,
+	}, nil
+}
+
+func prepareApplication(exePath string, layout *binaryLayout) (string, error) {
 	tempDir := os.Getenv("CAXA_TEMP_DIR")
 	if tempDir == "" {
 		tempDir = path.Join(os.TempDir(), "caxa")
 	}
 
 	for attempt := 0; ; attempt++ {
-		id := config.Identifier
+		id := layout.config.Identifier
 		sAttempt := strconv.Itoa(attempt)
 
 		appDir := path.Join(tempDir, "apps", id, sAttempt)
@@ -114,8 +192,8 @@ func prepareApplication(config *Config, payload []byte) (string, error) {
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
-		if config.UncompressionMessage != "" {
-			fmt.Fprint(os.Stderr, config.UncompressionMessage)
+		if layout.config.UncompressionMessage != "" {
+			fmt.Fprint(os.Stderr, layout.config.UncompressionMessage)
 			go func() {
 				t := time.NewTicker(2 * time.Second)
 				defer t.Stop()
@@ -131,7 +209,7 @@ func prepareApplication(config *Config, payload []byte) (string, error) {
 			}()
 		}
 
-		if err := extract(payload, appDir); err != nil {
+		if err := extract(layout, exePath, appDir); err != nil {
 			cancel()
 			os.RemoveAll(appDir)
 			os.RemoveAll(lockDir)
@@ -144,14 +222,44 @@ func prepareApplication(config *Config, payload []byte) (string, error) {
 	}
 }
 
-func extract(payload []byte, dest string) error {
-	gr, err := gzip.NewReader(bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	defer gr.Close()
+func extract(layout *binaryLayout, exePath string, dest string) error {
+	var (
+		payloadReader io.Reader
+		payloadFile   *os.File
+		err           error
+	)
 
-	tr := tar.NewReader(gr)
+	if len(layout.payload) > 0 {
+		payloadReader = bytes.NewReader(layout.payload)
+	} else {
+		payloadFile, err = os.Open(exePath)
+		if err != nil {
+			return err
+		}
+		defer payloadFile.Close()
+		payloadReader = io.NewSectionReader(payloadFile, layout.payloadOffset, layout.payloadSize)
+	}
+
+	var decompressedPayload io.ReadCloser
+	switch layout.config.Compression {
+	case "", "gzip":
+		gr, err := gzip.NewReader(payloadReader)
+		if err != nil {
+			return err
+		}
+		decompressedPayload = gr
+	case "zstd":
+		zr, err := zstd.NewReader(payloadReader)
+		if err != nil {
+			return err
+		}
+		decompressedPayload = zr.IOReadCloser()
+	default:
+		return fmt.Errorf("unsupported payload compression: %s", layout.config.Compression)
+	}
+	defer decompressedPayload.Close()
+
+	tr := tar.NewReader(decompressedPayload)
 
 	numWorkers := runtime.NumCPU()
 	jobs := make(chan fileJob, numWorkers*2)
