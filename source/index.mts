@@ -12,9 +12,9 @@ import { arch, platform } from "node:os";
 import path from "node:path";
 import url from "node:url";
 import stream from "node:stream/promises";
+import { parseArgs } from "node:util";
 import { createGzip, createZstdCompress } from "node:zlib";
 import archiver from "archiver";
-import * as commander from "commander";
 import process from "node:process";
 import { spawn } from "node:child_process";
 
@@ -140,6 +140,30 @@ interface PortableNodeBundle {
   root: string;
 }
 
+interface CliOptions {
+  input?: string;
+  output?: string;
+  targetsFile?: string;
+  metadataFile: string;
+  force: boolean;
+  exclude?: string[];
+  includeNode: boolean;
+  stub?: string;
+  identifier?: string;
+  removeBuildDirectory: boolean;
+  uncompressionMessage?: string;
+  upx: boolean;
+  upxArgs?: string[];
+  compression?: PayloadCompression;
+}
+
+interface ParsedCliArguments {
+  options: CliOptions;
+  command: string[];
+  showHelp: boolean;
+  showVersion: boolean;
+}
+
 function randomToken(length: number): string {
   const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
   const bytes = randomBytes(length);
@@ -201,6 +225,14 @@ async function writeJsonFile(
   await fsp.writeFile(filePath, JSON.stringify(value, null, spaces), "utf8");
 }
 
+function matchesGlobCompat(targetPath: string, pattern: string): boolean {
+  return (
+    path.matchesGlob(targetPath, pattern) ||
+    (pattern.startsWith("**/") &&
+      path.matchesGlob(targetPath, pattern.slice(3)))
+  );
+}
+
 function isExcludedPath(relativePath: string, exclude: string[]): boolean {
   const normalizedPath = normalizeArchivePath(relativePath);
   const segments = normalizedPath.split("/");
@@ -212,8 +244,8 @@ function isExcludedPath(relativePath: string, exclude: string[]): boolean {
 
   return exclude.some(
     (pattern) =>
-      path.matchesGlob(normalizedPath, pattern) ||
-      ancestors.some((ancestor) => path.matchesGlob(ancestor, pattern)),
+      matchesGlobCompat(normalizedPath, pattern) ||
+      ancestors.some((ancestor) => matchesGlobCompat(ancestor, pattern)),
   );
 }
 
@@ -225,8 +257,8 @@ function shouldPruneDirectory(
 
   return exclude.some(
     (pattern) =>
-      path.matchesGlob(normalizedPath, pattern) ||
-      path.matchesGlob(`${normalizedPath}/__caxa_probe__`, pattern),
+      matchesGlobCompat(normalizedPath, pattern) ||
+      matchesGlobCompat(`${normalizedPath}/__caxa_probe__`, pattern),
   );
 }
 
@@ -278,6 +310,145 @@ async function copyEntry(
 
   await fsp.copyFile(sourcePath, destinationPath);
   await fsp.chmod(destinationPath, stats.mode);
+}
+
+function createCliHelpText(version: string): string {
+  return stripIndent`
+    Usage: caxa [options] [command...]
+
+    Package Node.js applications into executable binaries
+
+    Arguments:
+      command                                The command to run. Paths must be absolute.
+                                             The '{{caxa}}' placeholder is substituted for the extraction directory.
+                                             The 'node' executable is available at '{{caxa}}/node_modules/.bin/node'.
+
+    Options:
+      -i, --input <input>                    [Required] Input directory to package.
+      -o, --output <output>                  Path where the executable will be produced.
+                                             On Windows, must end in '.exe'.
+      --targets-file <path>                  JSON file describing multiple native outputs to build from a single payload.
+      --metadata-file <path>                 Metadata file name for capturing npm components and dependencies in the bundled binary.
+      -F, --no-force                         Don’t overwrite output if it exists.
+      -e, --exclude <path...>                Paths to exclude from the build.
+      -N, --no-include-node                  Don’t copy the Node.js executable.
+      -s, --stub <path>                      Path to the stub.
+      --identifier <id>                      Build identifier.
+      -B, --no-remove-build-directory        Ignored in v3 (streaming build).
+      -m, --uncompression-message <msg>      Message to show during extraction.
+      --upx                                  Compress the output binary with UPX.
+      --upx-args <args...>                   Arguments to pass to UPX (e.g., '--best --lzma').
+      -c, --compression <type>               Payload compression: 'gzip' or 'zstd'. Native outputs default to 'zstd'.
+      -V, --version                          Output the version number.
+      -h, --help                             Display help for command.
+
+    Version:
+      ${version}
+  `;
+}
+
+function parseCompressionOption(
+  compression: string | undefined,
+): PayloadCompression | undefined {
+  if (compression === undefined) {
+    return undefined;
+  }
+
+  if (compression !== "gzip" && compression !== "zstd") {
+    throw new Error(
+      `Unsupported compression '${compression}'. Expected 'gzip' or 'zstd'.`,
+    );
+  }
+
+  return compression;
+}
+
+function normalizeCliOptionArgs(args: string[]): string[] {
+  const normalized: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const currentArg = args[index];
+    if (currentArg !== "--exclude" && currentArg !== "-e") {
+      normalized.push(currentArg);
+      continue;
+    }
+
+    const values: string[] = [];
+    for (let cursor = index + 1; cursor < args.length; cursor += 1) {
+      const candidate = args[cursor];
+      if (candidate.startsWith("-")) {
+        break;
+      }
+      values.push(candidate);
+      index = cursor;
+    }
+
+    if (values.length === 0) {
+      normalized.push(currentArg);
+      continue;
+    }
+
+    for (const value of values) {
+      normalized.push(currentArg, value);
+    }
+  }
+
+  return normalized;
+}
+
+function parseCliArguments(argv: string[]): ParsedCliArguments {
+  const separatorIndex = argv.indexOf("--");
+  const optionArgs =
+    separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+  const separatorCommand =
+    separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
+  const normalizedOptionArgs = normalizeCliOptionArgs(optionArgs);
+
+  const { values, positionals } = parseArgs({
+    args: normalizedOptionArgs,
+    allowPositionals: true,
+    strict: true,
+    options: {
+      input: { type: "string", short: "i" },
+      output: { type: "string", short: "o" },
+      "targets-file": { type: "string" },
+      "metadata-file": { type: "string" },
+      "no-force": { type: "boolean", short: "F" },
+      exclude: { type: "string", short: "e", multiple: true },
+      "no-include-node": { type: "boolean", short: "N" },
+      stub: { type: "string", short: "s" },
+      identifier: { type: "string" },
+      "no-remove-build-directory": { type: "boolean", short: "B" },
+      "uncompression-message": { type: "string", short: "m" },
+      upx: { type: "boolean" },
+      "upx-args": { type: "string", multiple: true },
+      compression: { type: "string", short: "c" },
+      version: { type: "boolean", short: "V" },
+      help: { type: "boolean", short: "h" },
+    },
+  });
+
+  return {
+    options: {
+      input: values.input,
+      output: values.output,
+      targetsFile: values["targets-file"],
+      metadataFile: values["metadata-file"] ?? "binary-metadata.json",
+      force: values["no-force"] ? false : true,
+      exclude: values.exclude,
+      includeNode: values["no-include-node"] ? false : true,
+      stub: values.stub,
+      identifier: values.identifier,
+      removeBuildDirectory: values["no-remove-build-directory"] ? false : true,
+      uncompressionMessage: values["uncompression-message"],
+      upx: values.upx ?? false,
+      upxArgs: values["upx-args"],
+      compression: parseCompressionOption(values.compression),
+    },
+    command: separatorCommand.length > 0 ? separatorCommand : positionals,
+    showHelp: values.help ?? false,
+    showVersion: values.version ?? false,
+  };
 }
 
 function normalizeUpxArgs(args: string[]): string[] {
@@ -1478,99 +1649,74 @@ export default async function caxa({
 
 if (
   url.fileURLToPath(import.meta.url) === (await fsp.realpath(process.argv[1]))
-)
-  await commander.program
-    .name("caxa")
-    .description("Package Node.js applications into executable binaries")
-    .requiredOption("-i, --input <input>", "Input directory to package.")
-    .option(
-      "-o, --output <output>",
-      "Path where the executable will be produced.",
-    )
-    .option(
-      "--targets-file <path>",
-      "JSON file describing multiple native outputs to build from a single payload.",
-    )
-    .option(
-      "--metadata-file <path>",
-      "Metadata file name for capturing npm components and dependencies in the bundled binary.",
-      "binary-metadata.json",
-    )
-    .option("-F, --no-force", "Don’t overwrite output if it exists.")
-    .option("-e, --exclude <path...>", "Paths to exclude from the build.")
-    .option("-N, --no-include-node", "Don’t copy the Node.js executable.")
-    .option("-s, --stub <path>", "Path to the stub.")
-    .option("--identifier <id>", "Build identifier.")
-    .option(
-      "-B, --no-remove-build-directory",
-      "Ignored in v2 (streaming build).",
-    )
-    .option(
-      "-m, --uncompression-message <msg>",
-      "Message to show during extraction.",
-    )
-    .option("--upx", "Compress the output binary with UPX.")
-    .option(
-      "--upx-args <args...>",
-      "Arguments to pass to UPX (e.g., '--best --lzma').",
-    )
-    .option(
-      "-c, --compression <type>",
-      "Payload compression for native outputs ('zstd' default) or shell outputs ('gzip' only).",
-      (value) => {
-        if (value !== "gzip" && value !== "zstd") {
-          throw new commander.InvalidArgumentError(
-            `Unsupported compression '${value}'. Expected 'gzip' or 'zstd'.`,
-          );
-        }
-        return value;
-      },
-    )
-    .argument("[command...]", "Command to run.")
-    .version(
-      JSON.parse(
-        await fsp.readFile(new URL("../package.json", import.meta.url), "utf8"),
-      ).version,
-    )
-    .action(async (command, opts) => {
-      try {
-        if (opts.targetsFile) {
-          if (opts.output || command.length > 0) {
-            throw new Error(
-              "Use either --targets-file or --output with a command, not both.",
-            );
-          }
+) {
+  const version = JSON.parse(
+    await fsp.readFile(new URL("../package.json", import.meta.url), "utf8"),
+  ).version;
+  const helpText = createCliHelpText(version);
 
-          const targets = await readJsonFile(opts.targetsFile);
-          if (!Array.isArray(targets)) {
-            throw new Error("Targets file must contain a JSON array.");
-          }
+  try {
+    const parsedArguments = parseCliArguments(process.argv.slice(2));
 
-          await caxaBatch({
-            input: opts.input,
-            exclude: opts.exclude,
-            includeNode: opts.includeNode,
-            stub: opts.stub,
-            compression: opts.compression,
-            upx: opts.upx,
-            upxArgs: opts.upxArgs,
-            targets,
-          });
-          return;
-        }
+    if (parsedArguments.showHelp) {
+      console.log(helpText);
+      process.exit(0);
+    }
 
-        if (!opts.output) {
-          throw new Error("Missing required option ‘--output’.\n");
-        }
-        if (command.length === 0) {
-          throw new Error("Missing required argument ‘command’.\n");
-        }
+    if (parsedArguments.showVersion) {
+      console.log(version);
+      process.exit(0);
+    }
 
-        await caxa({ command, ...opts });
-      } catch (error: any) {
-        console.error(error.message);
-        process.exit(1);
+    if (!parsedArguments.options.input) {
+      throw new Error("Missing required option ‘--input’.\n");
+    }
+
+    if (parsedArguments.options.targetsFile) {
+      if (
+        parsedArguments.options.output ||
+        parsedArguments.command.length > 0
+      ) {
+        throw new Error(
+          "Use either --targets-file or --output with a command, not both.",
+        );
       }
-    })
-    .showHelpAfterError()
-    .parseAsync();
+
+      const targets = await readJsonFile(parsedArguments.options.targetsFile);
+      if (!Array.isArray(targets)) {
+        throw new Error("Targets file must contain a JSON array.");
+      }
+
+      await caxaBatch({
+        input: parsedArguments.options.input,
+        exclude: parsedArguments.options.exclude,
+        includeNode: parsedArguments.options.includeNode,
+        stub: parsedArguments.options.stub,
+        compression: parsedArguments.options.compression,
+        upx: parsedArguments.options.upx,
+        upxArgs: parsedArguments.options.upxArgs,
+        targets,
+      });
+      process.exit(0);
+    }
+
+    if (!parsedArguments.options.output) {
+      throw new Error("Missing required option ‘--output’.\n");
+    }
+    if (parsedArguments.command.length === 0) {
+      throw new Error("Missing required argument ‘command’.\n");
+    }
+
+    await caxa({
+      ...parsedArguments.options,
+      input: parsedArguments.options.input,
+      output: parsedArguments.options.output,
+      command: parsedArguments.command,
+    });
+  } catch (error: any) {
+    console.error(error.message);
+    console.error();
+    console.error(helpText);
+    process.exit(1);
+  }
+}

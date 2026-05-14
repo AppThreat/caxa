@@ -4,6 +4,30 @@ import { execFileSync } from "node:child_process";
 import fs from "fs";
 import path from "path";
 
+test("caxa v3 cli: help and version", async () => {
+  const helpOutput = execFileSync(
+    process.execPath,
+    ["build/index.mjs", "--help"],
+    {
+      encoding: "utf8",
+    },
+  );
+  assert.match(helpOutput, /Usage: caxa \[options\] \[command\.\.\.\]/);
+  assert.match(helpOutput, /--targets-file <path>/);
+
+  const versionOutput = execFileSync(
+    process.execPath,
+    ["build/index.mjs", "--version"],
+    {
+      encoding: "utf8",
+    },
+  ).trim();
+  const packageVersion = JSON.parse(
+    fs.readFileSync(path.resolve("package.json"), "utf8"),
+  ).version;
+  assert.equal(versionOutput, packageVersion);
+});
+
 test("caxa v3 e2e: globby exclude patterns and directories", async () => {
   const fixtureDir = path.resolve("test/e2e-fixture-excludes");
   const outputBin = path.resolve(

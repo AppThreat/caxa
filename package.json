@@ -30,8 +30,7 @@
     "test:e2e": "node test/e2e.test.mjs"
   },
   "dependencies": {
-    "archiver": "^7.0.1",
-    "commander": "^14.0.0"
+    "archiver": "^7.0.1"
   },
   "devDependencies": {
     "@types/archiver": "^7.0.0",
