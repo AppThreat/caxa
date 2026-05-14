@@ -202,6 +202,147 @@ test("caxa v3 e2e: globby exclude patterns and directories", async () => {
   if (fs.existsSync(metadataPath)) fs.unlinkSync(metadataPath);
 });
 
+test("caxa v3 default excludes: node_modules docs, tests, maps, declarations, and markdown", async () => {
+  const fixtureDir = path.resolve("test/e2e-fixture-default-excludes");
+  const outputBin = path.resolve(
+    "test-output-default-excludes" +
+      (process.platform === "win32" ? ".exe" : ""),
+  );
+
+  for (const candidate of [
+    fixtureDir,
+    outputBin,
+    path.resolve("binary-metadata.json"),
+  ]) {
+    if (fs.existsSync(candidate)) {
+      fs.rmSync(candidate, { recursive: true, force: true });
+    }
+  }
+
+  fs.mkdirSync(path.join(fixtureDir, "node_modules", "pkg", "dist"), {
+    recursive: true,
+  });
+  fs.mkdirSync(path.join(fixtureDir, "node_modules", "pkg", "docs"), {
+    recursive: true,
+  });
+  fs.mkdirSync(path.join(fixtureDir, "node_modules", "pkg", "tests"), {
+    recursive: true,
+  });
+  fs.mkdirSync(path.join(fixtureDir, "node_modules", "pkg", "examples"), {
+    recursive: true,
+  });
+
+  fs.writeFileSync(
+    path.join(fixtureDir, "package.json"),
+    JSON.stringify({ name: "default-excludes-app", version: "1.0.0" }),
+  );
+  fs.writeFileSync(
+    path.join(fixtureDir, "index.js"),
+    [
+      "const fs = require('fs');",
+      "const path = require('path');",
+      "const walk = (dir, out = []) => {",
+      "  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {",
+      "    const abs = path.join(dir, entry.name);",
+      "    if (entry.isDirectory()) walk(abs, out);",
+      "    else out.push(path.relative(__dirname, abs).replace(/\\\\/g, '/'));",
+      "  }",
+      "  return out.sort();",
+      "};",
+      "console.log('DEFAULT_EXCLUDES::' + JSON.stringify(walk(__dirname)));",
+    ].join("\n"),
+  );
+  fs.writeFileSync(
+    path.join(fixtureDir, "node_modules", "pkg", "package.json"),
+    JSON.stringify({ name: "pkg", version: "1.0.0", main: "dist/index.js" }),
+  );
+  fs.writeFileSync(
+    path.join(fixtureDir, "node_modules", "pkg", "dist", "index.js"),
+    "module.exports = 'ok';",
+  );
+  fs.writeFileSync(
+    path.join(fixtureDir, "node_modules", "pkg", "dist", "index.js.map"),
+    "{}",
+  );
+  fs.writeFileSync(
+    path.join(fixtureDir, "node_modules", "pkg", "dist", "index.d.ts"),
+    "export {};",
+  );
+  fs.writeFileSync(
+    path.join(fixtureDir, "node_modules", "pkg", "README.md"),
+    "# pkg",
+  );
+  fs.writeFileSync(
+    path.join(fixtureDir, "node_modules", "pkg", "CHANGELOG.md"),
+    "initial release",
+  );
+  fs.writeFileSync(
+    path.join(fixtureDir, "node_modules", "pkg", "docs", "guide.md"),
+    "guide",
+  );
+  fs.writeFileSync(
+    path.join(fixtureDir, "node_modules", "pkg", "tests", "index.test.js"),
+    "throw new Error('should not ship');",
+  );
+  fs.writeFileSync(
+    path.join(fixtureDir, "node_modules", "pkg", "examples", "demo.js"),
+    "console.log('demo');",
+  );
+
+  execFileSync(
+    process.execPath,
+    [
+      "build/index.mjs",
+      "-i",
+      fixtureDir,
+      "-o",
+      outputBin,
+      "--no-include-node",
+      "--",
+      process.execPath,
+      "{{caxa}}/index.js",
+    ],
+    { stdio: "inherit" },
+  );
+
+  const stdout = execFileSync(outputBin, [], { encoding: "utf8" });
+  const match = stdout.match(/DEFAULT_EXCLUDES::(.*)/);
+  assert.ok(match, "Expected runtime file list from packaged app");
+  const files = JSON.parse(match[1]);
+
+  assert.ok(files.includes("node_modules/pkg/package.json"));
+  assert.ok(files.includes("node_modules/pkg/dist/index.js"));
+  assert.strictEqual(
+    files.includes("node_modules/pkg/dist/index.js.map"),
+    false,
+  );
+  assert.strictEqual(files.includes("node_modules/pkg/dist/index.d.ts"), false);
+  assert.strictEqual(files.includes("node_modules/pkg/README.md"), false);
+  assert.strictEqual(files.includes("node_modules/pkg/CHANGELOG.md"), false);
+  assert.strictEqual(
+    files.some((file) => file.startsWith("node_modules/pkg/docs/")),
+    false,
+  );
+  assert.strictEqual(
+    files.some((file) => file.startsWith("node_modules/pkg/tests/")),
+    false,
+  );
+  assert.strictEqual(
+    files.some((file) => file.startsWith("node_modules/pkg/examples/")),
+    false,
+  );
+
+  for (const candidate of [
+    fixtureDir,
+    outputBin,
+    path.resolve("binary-metadata.json"),
+  ]) {
+    if (fs.existsSync(candidate)) {
+      fs.rmSync(candidate, { recursive: true, force: true });
+    }
+  }
+});
+
 test("caxa v3 e2e: portable bundled Node runtime with zstd payloads", async () => {
   const fixtureDir = path.resolve("test/e2e-fixture-portable-node");
   const outputBin = path.resolve(
