@@ -4,6 +4,22 @@ import { execFileSync } from "node:child_process";
 import fs from "fs";
 import path from "path";
 
+function withPrefixedPath(prefix, extraEnv = {}) {
+  const env = { ...process.env, ...extraEnv };
+  const pathKey =
+    Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+  const currentPath = env[pathKey] ?? "";
+
+  for (const key of Object.keys(env)) {
+    if (key !== pathKey && key.toLowerCase() === "path") {
+      delete env[key];
+    }
+  }
+
+  env[pathKey] = `${prefix}${path.delimiter}${currentPath}`;
+  return env;
+}
+
 test("caxa v3 cli: help and version", async () => {
   const helpOutput = execFileSync(
     process.execPath,
@@ -679,11 +695,9 @@ test("caxa cli: variadic --upx-args values are forwarded to the UPX process", as
     ],
     {
       encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      env: withPrefixedPath(fakeBinDir, {
         UPX_LOG: upxLogPath,
-      },
+      }),
     },
   );
 
