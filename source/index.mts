@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   createReadStream,
   createWriteStream,
@@ -83,6 +83,7 @@ const defaultExcludes = [
   "docs/**",
   "test/**",
   "types/**",
+  "binary-metadata.json",
   "node_modules/*/.github/**",
   "node_modules/*/.vscode/**",
   "node_modules/*/doc/**",
@@ -350,6 +351,11 @@ async function copyEntry(
   await fsp.chmod(destinationPath, stats.mode);
 }
 
+async function setDeterministicFileTimes(filePath: string): Promise<void> {
+  const fixedTimestamp = new Date(0);
+  await fsp.utimes(filePath, fixedTimestamp, fixedTimestamp);
+}
+
 function createCliHelpText(version: string): string {
   return stripIndent`
     Usage: caxa [options] [command...]
@@ -500,6 +506,18 @@ function createIdentifier(output: string): string {
     path.basename(path.basename(path.basename(output, ".exe"), ".app"), ".sh"),
     randomToken(10),
   );
+}
+
+async function createContentAddressedIdentifier(
+  payloadPath: string,
+): Promise<string> {
+  const hash = createHash("sha256");
+
+  for await (const chunk of createReadStream(payloadPath)) {
+    hash.update(chunk);
+  }
+
+  return `sha256-${hash.digest("hex").slice(0, 32)}`;
 }
 
 function normalizeArchivePath(filePath: string): string {
@@ -818,15 +836,15 @@ async function preparePortableNodeBundle({
     const nodeDestination = path.join(binDir, path.basename(nodePath));
     await fsp.copyFile(nodePath, nodeDestination);
     await fsp.chmod(nodeDestination, 0o755);
+    await setDeterministicFileTimes(nodeDestination);
 
     for (const entry of await fsp.readdir(path.dirname(nodePath))) {
       if (!entry.toLowerCase().endsWith(".dll")) {
         continue;
       }
-      await fsp.copyFile(
-        path.join(path.dirname(nodePath), entry),
-        path.join(binDir, entry),
-      );
+      const destinationPath = path.join(binDir, entry);
+      await fsp.copyFile(path.join(path.dirname(nodePath), entry), destinationPath);
+      await setDeterministicFileTimes(destinationPath);
     }
 
     if (upx) {
@@ -842,6 +860,7 @@ async function preparePortableNodeBundle({
   await ensureDir(nodeLibDir);
   await fsp.copyFile(nodePath, nodeRealDestination);
   await fsp.chmod(nodeRealDestination, 0o755);
+  await setDeterministicFileTimes(nodeRealDestination);
 
   if (upx) {
     await runUpx(nodeRealDestination, normalizeUpxArgs(upxArgs));
@@ -853,10 +872,9 @@ async function preparePortableNodeBundle({
       : await collectLinuxRuntimeLibraries(nodePath);
 
   for (const libraryPath of runtimeLibraries) {
-    await fsp.copyFile(
-      libraryPath,
-      path.join(nodeLibDir, path.basename(libraryPath)),
-    );
+    const destinationPath = path.join(nodeLibDir, path.basename(libraryPath));
+    await fsp.copyFile(libraryPath, destinationPath);
+    await setDeterministicFileTimes(destinationPath);
   }
 
   const envVariableName =
@@ -871,6 +889,7 @@ async function preparePortableNodeBundle({
     ` + "\n",
     { mode: 0o755 },
   );
+  await setDeterministicFileTimes(path.join(binDir, wrapperName));
 
   return { root: bundleRoot };
 }
@@ -1449,12 +1468,15 @@ export async function caxaBatch({
       upxArgs,
     });
 
+    const contentAddressedIdentifier =
+      await createContentAddressedIdentifier(payloadPath);
+
     for (const target of targets) {
       await buildNativeOutput({
         output: target.output,
         force: target.force ?? true,
         metadataFile: target.metadataFile ?? "binary-metadata.json",
-        identifier: target.identifier ?? createIdentifier(target.output),
+        identifier: target.identifier ?? contentAddressedIdentifier,
         command: target.command,
         uncompressionMessage: target.uncompressionMessage,
         compression,
@@ -1487,7 +1509,7 @@ export default async function caxa({
       import.meta.url,
     ),
   ),
-  identifier = createIdentifier(output),
+  identifier,
   uncompressionMessage,
   compression = resolveCompressionForOutput(output),
   upx = false,
@@ -1599,8 +1621,26 @@ export default async function caxa({
     if (process.platform === "win32")
       throw new Error("The Shell Stub (.sh) isn’t supported in Windows.");
 
-    let shellStub =
-      stripIndent`
+    const payloadPath = createPayloadTempPath(
+      path.dirname(output),
+      compression,
+    );
+    try {
+      await createPayloadArchive({
+        input,
+        files,
+        destination: payloadPath,
+        includeNode,
+        compression,
+        upx,
+        upxArgs,
+      });
+      if (!identifier) {
+        identifier = await createContentAddressedIdentifier(payloadPath);
+      }
+
+      let shellStub =
+        stripIndent`
         #!/usr/bin/env sh
         export CAXA_TMP="$(dirname $(mktemp))/caxa"
         export CAXA_ID="${identifier}"
@@ -1623,25 +1663,11 @@ export default async function caxa({
           .join(" ")} "$@"
       ` + "\n";
 
-    shellStub = shellStub.replace(
-      "{{lines}}",
-      String(shellStub.split("\n").length),
-    );
-    await fsp.writeFile(output, shellStub, { mode: 0o755 });
-    const payloadPath = createPayloadTempPath(
-      path.dirname(output),
-      compression,
-    );
-    try {
-      await createPayloadArchive({
-        input,
-        files,
-        destination: payloadPath,
-        includeNode,
-        compression,
-        upx,
-        upxArgs,
-      });
+      shellStub = shellStub.replace(
+        "{{lines}}",
+        String(shellStub.split("\n").length),
+      );
+      await fsp.writeFile(output, shellStub, { mode: 0o755 });
       await appendFile(payloadPath, output);
     } finally {
       await removePath(payloadPath);
@@ -1662,6 +1688,9 @@ export default async function caxa({
         upx,
         upxArgs,
       });
+      if (!identifier) {
+        identifier = await createContentAddressedIdentifier(payloadPath);
+      }
       await buildNativeOutput({
         output,
         force,
