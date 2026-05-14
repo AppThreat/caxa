@@ -426,6 +426,7 @@ test("caxa batch mode: multiple native outputs share one payload build", async (
   const targetsFile = path.resolve("test/e2e-targets.json");
   const metadataOne = path.resolve("batch-one-metadata.json");
   const metadataTwo = path.resolve("batch-two-metadata.json");
+  const sharedTempDir = path.resolve("test-output-batch-cache");
 
   for (const candidate of [
     fixtureDir,
@@ -434,6 +435,7 @@ test("caxa batch mode: multiple native outputs share one payload build", async (
     targetsFile,
     metadataOne,
     metadataTwo,
+    sharedTempDir,
   ]) {
     if (fs.existsSync(candidate)) {
       fs.rmSync(candidate, { recursive: true, force: true });
@@ -491,12 +493,31 @@ test("caxa batch mode: multiple native outputs share one payload build", async (
   assert.ok(fs.existsSync(metadataTwo), "Second metadata file should exist");
 
   assert.match(
-    execFileSync(outputOne, [], { encoding: "utf8" }),
+    execFileSync(outputOne, [], {
+      encoding: "utf8",
+      env: { ...process.env, CAXA_TEMP_DIR: sharedTempDir },
+    }),
     /BATCH_ONE_OK/,
   );
   assert.match(
-    execFileSync(outputTwo, [], { encoding: "utf8" }),
+    execFileSync(outputTwo, [], {
+      encoding: "utf8",
+      env: { ...process.env, CAXA_TEMP_DIR: sharedTempDir },
+    }),
     /BATCH_TWO_OK/,
+  );
+
+  const appCacheRoot = path.join(sharedTempDir, "apps");
+  const cacheEntries = fs.existsSync(appCacheRoot)
+    ? fs
+        .readdirSync(appCacheRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+    : [];
+  assert.equal(
+    cacheEntries.length,
+    1,
+    "Binaries built from the same payload should share one extracted cache directory",
   );
 
   for (const candidate of [
@@ -506,6 +527,7 @@ test("caxa batch mode: multiple native outputs share one payload build", async (
     targetsFile,
     metadataOne,
     metadataTwo,
+    sharedTempDir,
   ]) {
     if (fs.existsSync(candidate)) {
       fs.rmSync(candidate, { recursive: true, force: true });
