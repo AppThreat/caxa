@@ -843,7 +843,10 @@ async function preparePortableNodeBundle({
         continue;
       }
       const destinationPath = path.join(binDir, entry);
-      await fsp.copyFile(path.join(path.dirname(nodePath), entry), destinationPath);
+      await fsp.copyFile(
+        path.join(path.dirname(nodePath), entry),
+        destinationPath,
+      );
       await setDeterministicFileTimes(destinationPath);
     }
 
