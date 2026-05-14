@@ -9,6 +9,7 @@
     "moduleDetection": "force",
 
     "lib": ["ESNext"],
+    "types": ["node"],
     "esModuleInterop": true,
     "skipLibCheck": true,
 

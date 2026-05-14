@@ -7,20 +7,34 @@ import {
   existsSync,
   readFileSync,
 } from "node:fs";
+import type { Stats } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { arch, platform } from "node:os";
 import path from "node:path";
+import type { Transform } from "node:stream";
 import url from "node:url";
 import stream from "node:stream/promises";
 import { parseArgs } from "node:util";
 import { createGzip, createZstdCompress } from "node:zlib";
-import archiver from "archiver";
+import * as archiverModule from "archiver";
 import process from "node:process";
 import { spawn } from "node:child_process";
 
 const archiveSeparator = "\nCAXACAXACAXA\n";
 const trailerMagic = "CAXAIDX1";
 const trailerSize = 32;
+
+type ArchiveLike = Transform & {
+  file(filename: string, data: { name: string; stats?: Stats }): unknown;
+  symlink(filepath: string, target: string, mode?: number): unknown;
+  finalize(): Promise<void>;
+};
+
+// archiver v8 is ESM-only and exposes named exports at runtime, while
+// @types/archiver still models the older default-export factory API.
+const { TarArchive } = archiverModule as unknown as {
+  TarArchive: new () => ArchiveLike;
+};
 
 type PayloadCompression = "gzip" | "zstd";
 
@@ -982,7 +996,7 @@ async function preparePortableNodeBundle({
 }
 
 async function appendDirectoryContentsToArchive(
-  archive: archiver.Archiver,
+  archive: ArchiveLike,
   root: string,
 ): Promise<void> {
   const files = await collectFiles(root, []);
@@ -1169,7 +1183,7 @@ async function createPayloadArchive({
   upx: boolean;
   upxArgs: string[];
 }): Promise<number> {
-  const archive = archiver("tar");
+  const archive = new TarArchive();
   const outputStream = createWriteStream(destination);
   const compressor =
     compression === "zstd" ? createZstdCompress() : createGzip();
