@@ -123,6 +123,7 @@ const defaultExcludes = [
   "cdxgen-*",
   "cdxgen-secure*",
   "cdx-*",
+  "hbom*",
   "cdxgen-arm64*",
   "cdx-arm64*",
   "*.yml",
